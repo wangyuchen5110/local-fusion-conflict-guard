@@ -6,14 +6,21 @@
 
 ## 接入
 
-在 PowerShell 中克隆工具，或进入已有的工具仓库。要同时安装为 Codex skill，首次克隆时可以改用[可选的 Codex skill](#可选的-codex-skill) 小节里的命令。
+让 agent 下载仓库（Git 克隆或 ZIP 解压均可），在**要编辑的项目根目录**调用下载目录里的 `start.ps1`。安装使用本地文件。以下路径换成下载目录的实际位置。
 
 ```powershell
-git clone https://github.com/wangyuchen5110/local-fusion-conflict-guard.git
-Set-Location .\local-fusion-conflict-guard
+$task = & 'D:\downloads\local-fusion-conflict-guard\start.ps1' | ConvertFrom-Json
+$guard = $task.guard
+& $guard claim -Agent $task.agent -Path 'src/api.ts'
 ```
 
-使用本地 stdio MCP 客户端需要 Python 3.10 或更高版本。在工具仓库根目录运行以下命令，把示例项目路径换成所有 agent 要编辑的同一份 Windows 工作目录。只有 `python` 命令时，用 `python` 替换 `py -3`。
+核对 `$task.project`。等 `claim` 返回 `ok: true` 后再读取并编辑文件，完成后执行 `& $guard release -Agent $task.agent`。如果下一次调用使用新的 shell，请记住返回的 `guard` 绝对路径和 `agent` ID，继续使用原值。从其他目录启动时，可用 `-Project` 指定项目。
+
+项目副本位于 `.agents/skills/local-fusion-conflict-guard`。下一个任务可再次运行 `start.ps1`，复用内容相同的安装并获取新身份。若内容不同，启动器会保留原安装。要使用原安装，调用其中的 `scripts/fusion-guard.ps1 join`。另一种方式是在目标项目中运行一次 `git clone https://github.com/wangyuchen5110/local-fusion-conflict-guard.git .agents/skills/local-fusion-conflict-guard`，然后调用其中的 `join`。每个任务只需获取一次身份。
+
+### 可选 MCP 接入
+
+需要 MCP 的宿主可以在完整工具仓库中配置 Python 3.10+。在工具仓库根目录运行以下命令，将示例项目路径换成所有 agent 的目标工作目录。只有 `python` 命令时，用它替换 `py -3`。
 
 ```powershell
 py -3 --version
@@ -78,9 +85,9 @@ Cursor 用户将下方条目合并到项目的 `.cursor/mcp.json`，并替换三
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-### 可选的 Codex skill
+### 可选的用户级 Codex skill
 
-首次安装时将工具克隆到此位置，Codex 即可发现 `$local-fusion-conflict-guard`。已安装的用户可沿用现有副本。通过 MCP 调用时仍需注册服务。[Codex skill 目录说明](https://learn.chatgpt.com/docs/build-skills)
+Codex 可以发现项目级安装。若想在多个项目共用一份用户级 skill，可以安装到以下位置。用户级 CLI 默认使用调用时的当前目录，也可显式传 `-Project`。[Codex skill 目录说明](https://learn.chatgpt.com/docs/build-skills)
 
 ```powershell
 $skillDir = Join-Path $HOME '.agents\skills\local-fusion-conflict-guard'
@@ -200,7 +207,7 @@ Add-Content -LiteralPath (Join-Path $demo 'notes.txt') -Value 'watch demo' -Enco
 
 | 现象 | 检查方法与处理 |
 | --- | --- |
-| 两个客户端看不到对方的占用 | 两边都调用 `status`，逐项核对 `project`，并确认任务在同一份本地工作树中。CLI 总是显式传 `-Project`。同一 MCP 连接里的任务要分别命名。 |
+| 两个客户端看不到对方的占用 | 两边都调用 `status`，逐项核对 `project`，并确认任务在同一份本地工作树中。如需纠正目标，CLI 可传 `-Project`。同一 MCP 连接里的任务要分别命名。 |
 | `claim` 返回冲突 | 核对 `conflicts[].agent`、`path`、`mode`、`expiresAt`。上层目录的 `tree` 占用也会覆盖当前文件。等待交接或先单独申请无关路径。 |
 | MCP 未列出工具，或提示缺少 `mcp` 模块 | 核对客户端配置里的 Python、`mcp_server.py` 和项目三个绝对路径。用配置里的那个 Python 执行 `-m pip show mcp`；需要安装时按[接入](#接入)说明在同一环境执行安装命令，之后重新连接。 |
 | 注册时报 `unknown option '--project'` | 在 Windows PowerShell 中按[接入](#接入)说明选用客户端的 `.exe` 或 `.cmd`，把 `--` 放在服务名与解释器之间，再检查保存的启动参数。 |
@@ -219,7 +226,7 @@ git pull --ff-only
 .\.venv\Scripts\python.exe -m pip install -r requirements-mcp.txt
 ```
 
-若 skill 是从仓库复制出来的，按原安装方式同步副本。重连后运行 `status` 核对项目路径，并用上述双任务演练检查交接。
+若使用 ZIP 下载，将新版解压到新目录。要更新 `start.ps1` 安装的项目副本，先停止参与任务，核对旧的专用 skill 目录，将它移至备份位置，再对该项目运行新版启动器。重连后运行 `status` 核对项目路径，并用上述双任务演练检查交接。
 
 停用时，先释放占用并关闭监听。Codex CLI 里注册名为 `fusion-guard` 的服务可用 `codex mcp remove fusion-guard` 移除；若使用其他名称，换成实际注册名。JSON 客户端只需移除本工具的 `mcpServers` 条目并重新连接，同时移除为本工具添加的项目指令。按需移除专用的 skill 安装副本、工具克隆及其虚拟环境。项目中的 `.codex/fusion-agent-guard/` 仅保存协调数据，全部参与者停用后可保留，或核实这个专用子目录后手动清理。业务源码和其他 `.codex` 配置属于项目本身。
 

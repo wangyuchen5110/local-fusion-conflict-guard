@@ -6,14 +6,21 @@ The CLI walkthrough below uses Windows PowerShell 5.1 or PowerShell 7. For tool 
 
 ## Setup
 
-Clone the tool in PowerShell, or open an existing clone. To install it as a Codex skill, use the alternate clone command under [Optional Codex skill](#optional-codex-skill).
+Have the agent download the repository (Git clone or ZIP) and run the downloaded `start.ps1` from the **root of the project it will edit**. Installation uses local files. Substitute the actual download location below.
 
 ```powershell
-git clone https://github.com/wangyuchen5110/local-fusion-conflict-guard.git
-Set-Location .\local-fusion-conflict-guard
+$task = & 'D:\downloads\local-fusion-conflict-guard\start.ps1' | ConvertFrom-Json
+$guard = $task.guard
+& $guard claim -Agent $task.agent -Path 'src/api.ts'
 ```
 
-For a stdio MCP client, use Python 3.10 or newer. From the tool repository, replace the example project path with the existing Windows working tree all agents will edit. If you use the `python` launcher, substitute `python` for `py -3`.
+Check `$task.project`. After `claim` returns `ok: true`, read the current files and edit them. At the end run `& $guard release -Agent $task.agent`. If later commands run in fresh shells, keep the returned absolute `guard` path and `agent` ID and reuse their literal values. Pass `-Project` to the launcher when starting from a different directory.
+
+The project copy lives under `.agents/skills/local-fusion-conflict-guard`. Another task can rerun `start.ps1` to reuse a matching installation and get its own identity. A mismatch leaves the existing files in place. To use the existing installation, call its `scripts/fusion-guard.ps1 join`. Alternatively, from the target project, run `git clone https://github.com/wangyuchen5110/local-fusion-conflict-guard.git .agents/skills/local-fusion-conflict-guard` once and call `join` in that clone. Obtain one identity per task.
+
+### Optional MCP setup
+
+For an MCP host, configure Python 3.10+ in the full tool repository. Run these commands from the tool repository root and substitute the project the agents will edit. If you have the `python` launcher, use `python` in place of `py -3`.
 
 ```powershell
 py -3 --version
@@ -78,9 +85,9 @@ After installing the MCP dependencies, run the integration suite from the tool r
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-### Optional Codex skill
+### Optional user-wide Codex skill
 
-On a first install, use this clone location to make `$local-fusion-conflict-guard` discoverable by Codex. If it is already installed, use the existing skill. MCP clients still need their server registration. [Codex skill directories](https://learn.chatgpt.com/docs/build-skills)
+Codex can discover the project install. If you want one skill across multiple projects, use the location below. The CLI in a user-wide install defaults to the current working directory. Use `-Project` to override it. [Codex skill directories](https://learn.chatgpt.com/docs/build-skills)
 
 ```powershell
 $skillDir = Join-Path $HOME '.agents\skills\local-fusion-conflict-guard'
@@ -200,7 +207,7 @@ For a bounded CLI run, use `& $guard watch -Project $demo -DurationSeconds 10 -M
 
 | Symptom | What to check |
 | --- | --- |
-| Clients cannot see each other's claims | Call `status` on each side, compare `project` and confirm both tasks use the same local working tree. Pass `-Project` explicitly to the CLI. Give each task on a shared MCP connection a distinct label. |
+| Clients cannot see each other's claims | Call `status` on each side, compare `project` and confirm both tasks use the same local working tree. Pass `-Project` to override the CLI default if needed. Give each task on a shared MCP connection a distinct label. |
 | `claim` returns a conflict | Inspect `agent`, `path`, `mode` and `expiresAt` in each `conflicts` entry. A `tree` claim on a parent directory also covers the file. Wait for the handoff or request an unrelated path separately. |
 | No MCP tools appear or the `mcp` module is missing | Check the absolute paths of the Python interpreter, `mcp_server.py` and the project in the client config. Run `-m pip show mcp` with that exact interpreter. Follow [Setup](#setup) to install into that environment if needed, then reconnect. |
 | Registration reports `unknown option '--project'` | In Windows PowerShell, select the client's `.exe` or `.cmd` as shown in [Setup](#setup). Put `--` between the server name and the interpreter and check the saved launch arguments. |
@@ -219,7 +226,7 @@ git pull --ff-only
 .\.venv\Scripts\python.exe -m pip install -r requirements-mcp.txt
 ```
 
-If you copied the skill from the repository, refresh the copy using the same installation method. After reconnecting, call `status` to verify the project path and repeat the handoff exercise to check coordination.
+For a ZIP download, unpack the new version to a new directory. To update a project copy installed with `start.ps1`, stop the participating tasks, review and move the old dedicated skill directory to a backup location, then run the new launcher against the project. After reconnecting, call `status` to verify the project path and repeat the handoff exercise.
 
 To disconnect the guard, release active claims and stop the watcher. For Codex CLI, run `codex mcp remove fusion-guard`, substituting your registered name if it differs. For a JSON-configured client, remove the guard's entry from `mcpServers` and reconnect. Remove guard-specific instructions added to the target project. You can then remove the dedicated skill copy, tool checkout and its virtual environment. The project registry is confined to `.codex/fusion-agent-guard/`. Once all participants have stopped using it, you can keep it or verify and remove that specific subdirectory. Other `.codex` settings and business source files belong to the project.
 

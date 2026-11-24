@@ -6,11 +6,11 @@ Use this reference to decide when an agent can edit a path and how to interpret 
 
 ## Project and agent identity
 
-The PowerShell CLI accepts an existing directory in `-Project` and defaults to the current directory. The MCP server requires `--project` at startup. Every call to that server uses the configured directory. Compare the `project` field returned by `status` on each client. Separate Git worktrees, separate clones and a parent directory and its subdirectory each have their own claim registry when selected as project roots.
+For a CLI installed at `<project>/.agents/skills/local-fusion-conflict-guard`, the enclosing project is the default even from another working directory. A user-wide `$HOME/.agents/skills` install and other layouts use the current directory. An explicit `-Project` overrides the default. The MCP server requires `--project` at startup. Every call to that server uses the configured directory. Compare the `project` field returned by `status` on each client. Separate Git worktrees, separate clones and a parent directory and its subdirectory each have their own claim registry when selected as project roots.
 
 | Client setup | Source of identity | How to renew or release |
 | --- | --- | --- |
-| PowerShell CLI | Both `claim` and `release` require a nonblank `-Agent` | Use the same name throughout the task |
+| PowerShell CLI | `join` or the first `claim` generates a new ID if `-Agent` is omitted. Both commands also accept a nonblank name. | Retain the returned `agent` and pass it explicitly to subsequent claims, renewals and `release`, even in another shell |
 | One task per MCP server process | The server generates `mcp-<random ID>` when it starts | Omit `agent` on both `claim` and `release` |
 | Multiple tasks using the same MCP server process | The owner is `mcp-<random ID>/<task name>` | Give each concurrent task a distinct `agent` label and reuse that label on each call for the task |
 
@@ -49,6 +49,7 @@ Suppose the CLI task `api` holds a tree claim on `src`. When the MCP task `ui` c
   "ok": false,
   "kind": "claim-conflict",
   "project": "D:\\work\\demo",
+  "agent": "mcp-demo/ui",
   "requested": [{"agent":"mcp-demo/ui","path":"src/app.ts","mode":"file"}],
   "conflicts": [{"agent":"api","path":"src","mode":"tree","expiresAt":"2026-11-24T08:10:00+00:00"}]
 }
@@ -62,12 +63,15 @@ In these examples `$guard` holds the path to `scripts/fusion-guard.ps1` and `$pr
 
 | Command | Parameters and behavior |
 | --- | --- |
+| `& $guard join -Project $project` | Returns `kind: "joined"`, `ok`, the `project`, absolute `guard` script path and task `agent`. Omit `-Agent` for a new unique ID, or supply your task name. No path is claimed. |
 | `& $guard claim -Project $project -Agent api -Path 'src/a.ts','src/b.ts'` | `-Path` requires one or more nonblank paths. `-Mode` accepts `file` (default) or `tree`. `-TtlSeconds` defaults to 600 and accepts 15–86400 |
 | `& $guard status -Project $project` | Clears expired records and returns a snapshot of claims across the project |
 | `& $guard release -Project $project -Agent api` | Releases every active claim held by `api`. If none match, the command succeeds with `released: 0` |
 | `& $guard cleanup -Project $project` | Removes expired records and returns the count in `expiredRemoved`. MCP clients can trigger the same cleanup through `status` |
 | `& $guard watch -Project $project -IntervalSeconds 2` | Watches continuously in the foreground until Ctrl+C. `-IntervalSeconds` controls how often the guard checks for overlapping claim records. It defaults to 2 and accepts 1–60 seconds |
 | `& $guard watch -Project $project -DurationSeconds 5 -MaxEvents 10` | Optional limits are 1–15 seconds for `-DurationSeconds` and 1–1000 records for `-MaxEvents`. The first limit reached ends the watch. The initial startup record is excluded from the count |
+
+Each `claim` made without `-Agent` creates a fresh identity, including a rejected request. Read its top-level `agent` on success or conflict and reuse it on retry, renewal and release. `release` requires an explicit nonblank `-Agent`.
 
 Single-result commands emit one JSON object to standard output. The watcher emits one JSON object per line. Normal completion returns exit code `0`. A `claim` conflict returns `2`. For `status`, exit code `2` means that existing active records overlap. When launched as a separate PowerShell process, a script failure typically returns `1` and writes to the error stream. When calling with `&` in an existing PowerShell session, catch terminating errors and read `$LASTEXITCODE` immediately after a successful or conflicting call.
 

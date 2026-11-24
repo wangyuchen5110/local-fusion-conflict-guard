@@ -2,19 +2,12 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-Coordinate coding agents in one Windows project. Each agent claims a file before editing and releases it when done. PowerShell and MCP clients share the same claims and can watch for file changes.
+Help local coding agents share a Windows project. Each agent claims a file before editing and releases it when done.
 
-## Try it in PowerShell
+**Send this to your agent:**
 
-```powershell
-git clone https://github.com/wangyuchen5110/local-fusion-conflict-guard.git
-cd local-fusion-conflict-guard
-$guard = '.\scripts\fusion-guard.ps1'
-& $guard claim -Agent A -Path demo.txt
-& $guard claim -Agent B -Path demo.txt   # Conflict: A holds the file
-& $guard release -Agent A
-```
+> Download https://github.com/wangyuchen5110/local-fusion-conflict-guard and use it to coordinate edits in my current project.
 
-The demo uses the cloned directory. For your own project, point every client at the same root (`-Project` in PowerShell, `--project` in MCP).
+From the project root, the agent runs the downloaded `start.ps1` to get its task ID and guard script path. Other tasks reuse the project copy with their own IDs. Requires Windows PowerShell 5.1 or PowerShell 7. [Optional MCP setup](references/usage.en.md#setup)
 
-[MCP setup for Codex, Claude Code and Cursor](references/usage.en.md#setup) · [User guide](references/usage.en.md) · [Command reference](references/protocol.en.md)
+[Agent instructions](SKILL.en.md) · [User guide](references/usage.en.md) · [Command reference](references/protocol.en.md)

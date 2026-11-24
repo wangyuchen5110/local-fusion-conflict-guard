@@ -6,11 +6,11 @@
 
 ## 项目和身份
 
-PowerShell 命令通过 `-Project` 指定已有目录，省略时使用当前目录。MCP 在启动时用必填的 `--project` 固定项目，工具调用中无需传项目。用 `status` 的 `project` 字段核对各端是否打开同一工作目录。两个 Git 工作树、同一仓库的两份克隆或分别选中的父子目录，都使用各自的占用记录。
+CLI 安装在 `<项目>/.agents/skills/local-fusion-conflict-guard` 时，在哪个目录调用都默认选择该项目。`$HOME/.agents/skills` 用户级安装和其他布局默认使用当前目录。显式传入的 `-Project` 优先。MCP 在启动时用必填的 `--project` 固定项目，工具调用中无需传项目。用 `status` 的 `project` 字段核对各端是否打开同一工作目录。两个 Git 工作树、同一仓库的两份克隆或分别选中的父子目录，都使用各自的占用记录。
 
 | 使用方式 | 身份从哪里来 | 续租和释放时怎么填 |
 | --- | --- | --- |
-| PowerShell | `claim`、`release` 必填非空 `-Agent` | 同一任务始终使用同一名称 |
+| PowerShell | `join` 或首次 `claim` 省略 `-Agent` 时会生成新 ID。也可传非空名称 | 保存返回的 `agent`，随后的申请、续租和 `release` 都显式传入该身份，包括在其他 shell 中执行时 |
 | 一个任务独享一个 MCP 服务进程 | 进程启动时生成 `mcp-<随机 ID>` | 该连接上的 `claim` 和 `release` 都省略 `agent` |
 | 多个任务共享一个 MCP 服务进程 | 完整身份为 `mcp-<随机 ID>/<任务名>` | 为每个并行任务选不同的 `agent`，同一任务的每次调用都传原名称 |
 
@@ -49,6 +49,7 @@ MCP 可选的 `agent` 标签为 1–120 个字符。身份比较忽略大小写�
   "ok": false,
   "kind": "claim-conflict",
   "project": "D:\\work\\demo",
+  "agent": "mcp-demo/ui",
   "requested": [{"agent":"mcp-demo/ui","path":"src/app.ts","mode":"file"}],
   "conflicts": [{"agent":"api","path":"src","mode":"tree","expiresAt":"2026-11-24T08:10:00+00:00"}]
 }
@@ -62,12 +63,15 @@ MCP 将这类竞争作为正常工具结果返回。宿主先判断调用是否�
 
 | 命令示例 | 参数与行为 |
 | --- | --- |
+| `& $guard join -Project $project` | 返回 `kind: "joined"`、`ok`、`project`、绝对脚本路径 `guard` 和任务身份 `agent`。省略 `-Agent` 生成唯一 ID，也可传任务名。这一步不会占用文件。 |
 | `& $guard claim -Project $project -Agent api -Path 'src/a.ts','src/b.ts'` | `-Path` 至少一个非空路径。可加 `-Mode file` 或 `tree`，`-TtlSeconds` 默认 600，范围 15–86400 |
 | `& $guard status -Project $project` | 清理到期记录后，返回整个项目的占用快照 |
 | `& $guard release -Project $project -Agent api` | 释放 `api` 的全部有效占用。没有匹配记录时也成功，`released` 为 0 |
 | `& $guard cleanup -Project $project` | 仅清理到期记录，返回 `expiredRemoved`。MCP 端调用 `status` 也会清理 |
 | `& $guard watch -Project $project -IntervalSeconds 2` | 前台持续监听，Ctrl+C 停止。`-IntervalSeconds` 是检查已有占用冲突的周期，默认 2，范围 1–60 秒 |
 | `& $guard watch -Project $project -DurationSeconds 5 -MaxEvents 10` | 可选 `-DurationSeconds` 为 1–15 秒，`-MaxEvents` 为 1–1000 条。两者同时指定时先达到的条件结束监听，启动记录不计数 |
+
+每次省略 `-Agent` 的 `claim` 都会生成新身份，申请被拒也一样。成功和冲突响应的顶层都有 `agent`，请在重试、续租和释放时传回这个值。`release` 必须显式传入非空的 `-Agent`。
 
 单次命令把一个 JSON 对象输出到标准输出，`watch` 则每行输出一个 JSON 对象。正常完成退出码为 `0`。申请发生冲突时 `claim` 返回 `2`，而 `status` 返回 `2` 表示它发现已经存在的冲突对。脚本执行失败时，独立的 PowerShell 进程通常返回 `1` 并写入错误流。在已有 PowerShell 会话中用 `&` 调用时，还应捕获终止错误；成功与冲突的退出码在调用后立即读取 `$LASTEXITCODE`。
 

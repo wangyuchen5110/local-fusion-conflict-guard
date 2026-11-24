@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet('claim', 'release', 'status', 'cleanup', 'watch')]
+    [ValidateSet('join', 'claim', 'release', 'status', 'cleanup', 'watch')]
     [string]$Command,
 
     [string]$Project = (Get-Location).Path,
@@ -37,7 +37,29 @@ function Get-ProjectRoot([string]$InputPath) {
     return $fullPath.TrimEnd('\')
 }
 
+if (-not $PSBoundParameters.ContainsKey('Project')) {
+    $localInstall = '\.agents\skills\local-fusion-conflict-guard\scripts\fusion-guard.ps1'
+    if ($PSCommandPath.EndsWith($localInstall, [StringComparison]::OrdinalIgnoreCase)) {
+        $scripts = [IO.DirectoryInfo]::new($PSScriptRoot)
+        $workspace = $scripts.Parent.Parent.Parent.Parent.FullName
+        # A personal skill installation serves the caller's working directory.
+        if (-not $workspace.Equals((Get-ProjectRoot $HOME), [StringComparison]::OrdinalIgnoreCase)) {
+            $Project = $workspace
+        }
+    }
+}
 $projectRoot = Get-ProjectRoot $Project
+if ($Command -in 'join', 'claim') {
+    if (-not $PSBoundParameters.ContainsKey('Agent')) {
+        $Agent = [Guid]::NewGuid().ToString('N')
+    } elseif ([string]::IsNullOrWhiteSpace($Agent)) {
+        throw '-Agent must be nonempty when supplied.'
+    }
+}
+if ($Command -eq 'join') {
+    Write-Json ([pscustomobject]@{ ok = $true; kind = 'joined'; project = $projectRoot; agent = $Agent; guard = $PSCommandPath })
+    exit 0
+}
 $stateRoot = Join-Path $projectRoot '.codex\fusion-agent-guard'
 $claimsRoot = Join-Path $stateRoot 'claims'
 $lockPath = Join-Path $stateRoot '.registry.lock'
@@ -161,7 +183,6 @@ function Test-IgnoredPath([string]$RelativePath) {
 
 switch ($Command) {
     'claim' {
-        if ([string]::IsNullOrWhiteSpace($Agent)) { throw 'claim requires -Agent.' }
         if ($null -eq $Path -or $Path.Count -eq 0) { throw 'claim requires one or more -Path values.' }
         $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
         $paths = @($Path | ForEach-Object { Get-RelativeProjectPath $_ } | Where-Object { $seen.Add($_) })
@@ -176,7 +197,7 @@ switch ($Command) {
                 }
             }
             if ($blockers.Count -gt 0) {
-                return [pscustomobject]@{ ok = $false; kind = 'claim-conflict'; project = $projectRoot; requested = $requested; conflicts = @($blockers | Select-Object agent, path, mode, expiresAt) }
+                return [pscustomobject]@{ ok = $false; kind = 'claim-conflict'; project = $projectRoot; agent = $Agent; requested = $requested; conflicts = @($blockers | Select-Object agent, path, mode, expiresAt) }
             }
 
             $expiresAt = [DateTimeOffset]::UtcNow.AddSeconds($TtlSeconds).ToString('o')
@@ -192,7 +213,7 @@ switch ($Command) {
                 Write-Claim $claimPath $claim
                 $created += $claim
             }
-            return [pscustomobject]@{ ok = $true; kind = 'claim-accepted'; project = $projectRoot; expiredRemoved = $expired; claims = $created }
+            return [pscustomobject]@{ ok = $true; kind = 'claim-accepted'; project = $projectRoot; agent = $Agent; expiredRemoved = $expired; claims = $created }
         }
         Write-Json $result
         if (-not $result.ok) { exit 2 }
