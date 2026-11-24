@@ -9,6 +9,7 @@
 - Two file claims collide only when their normalized paths are equal.
 - A tree claim collides with a file or tree claim at the tree root or below it.
 - The same agent can refresh its own claim. Claims from distinct agents conflict even when their TTLs differ.
+- Agent labels are compared case-insensitively. Use distinct task names beyond capitalization when a host shares one MCP connection. A new server process gets a new identity. After a restart, earlier claims remain visible until their TTL expires.
 
 All paths must remain under `-Project`. The guard rejects paths outside the project instead of creating an ambiguous claim.
 
@@ -16,11 +17,11 @@ All paths must remain under `-Project`. The guard rejects paths outside the proj
 
 | Command | Meaning | Exit codes |
 | --- | --- | --- |
-| `claim` | Atomically checks then creates/refreshes each requested claim. | `0` accepted; `2` overlapping active claim; `1` invalid request/error |
+| `claim` | Checks the whole batch under one lock before writing any claims. A conflict rejects the entire batch. | `0` accepted; `2` overlapping active claim; `1` invalid request/error |
 | `release` | Removes all active claims held by one agent. | `0` |
 | `status` | Emits active claims and every overlap (normally none). | `0`, or `2` if conflicting records already exist |
 | `cleanup` | Removes expired claims. | `0` |
-| `watch` | Foreground watcher for source-file writes and active-claim overlap. | `0` on normal stop; `1` error |
+| `watch` | Streams create, change, rename and delete events. Optional `-DurationSeconds` and `-MaxEvents` bound a call. | `0` on normal stop; `1` error |
 
 Use claims as a cooperative lease, not a security boundary. An uncooperative process can still write files. The watcher reports observed changes and claims covering their paths; it cannot prove which operating-system process wrote them. Files below `.git` and the guard’s own state directory are ignored.
 

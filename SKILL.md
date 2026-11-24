@@ -1,19 +1,18 @@
 ---
 name: local-fusion-conflict-guard
-description: Coordinate concurrent local edits by multiple Fusion or Codex agents using project-scoped path claims and a filesystem watcher. Use when agents share one working tree and must avoid overlapping writes; not for resolving an existing Git merge conflict.
+description: Coordinate agents editing one Windows working tree through shared file and directory claims. Use the local Fusion Guard MCP tools or PowerShell CLI before overlapping edits.
 ---
 
 # Local Fusion Conflict Guard
 
-Use this skill to prevent a local multi-agent editing collision before files are changed. It creates only ephemeral coordination data under the target project's `.codex/fusion-agent-guard/` directory; it does not alter source files, Git state, or remote services.
+All participating agents must use the same project root. The MCP server and PowerShell CLI share the project's `.codex/fusion-agent-guard/` registry. When configuring a new client, follow the [setup instructions](README.md).
 
 ## Protocol
 
-1. Pick a stable, human-readable agent identity for the task. Before reading a file with the intention to edit it, claim the exact file. Claim a directory tree only when the entire subtree is genuinely owned by that agent.
-2. If `claim` returns exit code `2`, do not write any of the requested paths. Inspect the reported owner and scope, then divide work differently, wait, or ask the coordinating user/agent to resolve ownership.
-3. Start one `watch` process at the project root while concurrent work is active. Treat a write inside another agent's active claim as a coordination incident. The watcher reports it; it never overwrites, reverts, or auto-merges changes.
-4. Refresh a long-running claim before its TTL expires. Release every claim when the edit is complete, abandoned, or handed off. Expired claims are automatically ignored.
-5. Before a cross-cutting refactor, use `status` to discover overlapping ownership. Keep edits scoped to claimed paths and use ordinary Git diff/review for integration after all claims are released.
+1. Use the configured `claim` MCP tool or the CLI below. An independent MCP process has a unique default identity. When several tasks share a connection, include a unique task name in the optional MCP `agent` argument for every claim and release. CLI users supply `-Agent`.
+2. Claim exact file paths in one request before editing. Use `mode: "tree"` for exclusive edits to a subtree. Proceed only after MCP returns `ok: true` or the CLI exits with code `0`. On conflict or tool failure, pause writes to the requested paths. Read the current file after acquiring ownership.
+3. Refresh claims with the same identity before expiry. `release` frees all claims for that identity, so call it once every edit covered by them is done. If the original lease has expired, acquire a fresh lease and reread the file.
+4. Use `status` to inspect ownership. To observe file changes, use `watch_changes` for a short MCP observation window or `watch` for a continuous CLI stream. A matching claim identifies its holder. The watcher cannot attribute the write itself.
 
 The helper script is at `scripts/fusion-guard.ps1`. Run it from PowerShell:
 

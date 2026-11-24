@@ -12,7 +12,11 @@ param(
     [ValidateRange(15, 86400)]
     [int]$TtlSeconds = 600,
     [ValidateRange(1, 60)]
-    [int]$IntervalSeconds = 2
+    [int]$IntervalSeconds = 2,
+    [ValidateRange(1, 15)]
+    [int]$DurationSeconds,
+    [ValidateRange(1, 1000)]
+    [int]$MaxEvents
 )
 
 Set-StrictMode -Version Latest
@@ -27,28 +31,32 @@ function Get-ProjectRoot([string]$InputPath) {
     if (-not (Test-Path -LiteralPath $resolved.Path -PathType Container)) {
         throw "Project must be an existing directory: $InputPath"
     }
-    return [IO.Path]::GetFullPath($resolved.Path).TrimEnd('\')
+    $fullPath = [IO.Path]::GetFullPath($resolved.ProviderPath)
+    $volumeRoot = [IO.Path]::GetPathRoot($fullPath)
+    if ($fullPath.TrimEnd('\') -eq $volumeRoot.TrimEnd('\')) { return $volumeRoot }
+    return $fullPath.TrimEnd('\')
 }
 
 $projectRoot = Get-ProjectRoot $Project
 $stateRoot = Join-Path $projectRoot '.codex\fusion-agent-guard'
 $claimsRoot = Join-Path $stateRoot 'claims'
 $lockPath = Join-Path $stateRoot '.registry.lock'
-New-Item -ItemType Directory -Force -Path $claimsRoot | Out-Null
+[IO.Directory]::CreateDirectory($claimsRoot) | Out-Null
 
 function Get-RelativeProjectPath([string]$InputPath) {
+    if ([string]::IsNullOrWhiteSpace($InputPath)) { throw 'Claim paths must be nonempty.' }
     if ([IO.Path]::IsPathRooted($InputPath)) {
         $candidate = [IO.Path]::GetFullPath($InputPath)
     } else {
         $candidate = [IO.Path]::GetFullPath((Join-Path $projectRoot $InputPath))
     }
 
-    $prefix = $projectRoot + '\'
-    if ($candidate -ne $projectRoot -and -not $candidate.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+    $candidate = $candidate.TrimEnd('\')
+    $base = $projectRoot.TrimEnd('\')
+    if ($candidate.Equals($base, [StringComparison]::OrdinalIgnoreCase)) { return '.' }
+    $prefix = $base + '\'
+    if (-not $candidate.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Path is outside the project: $InputPath"
-    }
-    if ($candidate -eq $projectRoot) {
-        return '.'
     }
     return $candidate.Substring($prefix.Length).Replace('\', '/')
 }
@@ -61,11 +69,11 @@ function Read-Claims {
     $claims = @()
     foreach ($file in Get-ClaimFiles) {
         try {
-            $claim = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
+            $claim = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
             $claim | Add-Member -NotePropertyName claimFile -NotePropertyValue $file.FullName -Force
             $claims += $claim
         } catch {
-            Write-Warning "Ignoring unreadable claim file: $($file.FullName)"
+            throw "Cannot read claim file: $($file.FullName)"
         }
     }
     return @($claims)
@@ -75,26 +83,24 @@ function Remove-ExpiredClaims {
     $now = [DateTimeOffset]::UtcNow
     $removed = 0
     foreach ($claim in Read-Claims) {
-        try {
-            if ([DateTimeOffset]::Parse([string]$claim.expiresAt).ToUniversalTime() -le $now) {
-                Remove-Item -LiteralPath $claim.claimFile -Force
-                $removed++
-            }
-        } catch {
-            Write-Warning "Could not evaluate claim expiry: $($claim.claimFile)"
+        # ConvertFrom-Json materializes ISO timestamps as DateTime on some PowerShell versions.
+        $expiry = [DateTimeOffset]$claim.expiresAt
+        if ($expiry -le $now) {
+            Remove-Item -LiteralPath $claim.claimFile -Force
+            $removed++
         }
     }
     return $removed
 }
 
 function Test-Overlap([object]$Left, [object]$Right) {
-    $leftPath = [string]$Left.path
-    $rightPath = [string]$Right.path
-    if ($leftPath -eq $rightPath) { return $true }
+    $leftPath = ([string]$Left.path).TrimEnd('/')
+    $rightPath = ([string]$Right.path).TrimEnd('/')
+    if ($leftPath.Equals($rightPath, [StringComparison]::OrdinalIgnoreCase)) { return $true }
     $leftTree = ([string]$Left.mode -eq 'tree')
     $rightTree = ([string]$Right.mode -eq 'tree')
-    return ($leftTree -and $rightPath.StartsWith($leftPath.TrimEnd('/') + '/', [StringComparison]::OrdinalIgnoreCase)) -or
-           ($rightTree -and $leftPath.StartsWith($rightPath.TrimEnd('/') + '/', [StringComparison]::OrdinalIgnoreCase))
+    return ($leftTree -and ($leftPath -eq '.' -or $rightPath.StartsWith($leftPath + '/', [StringComparison]::OrdinalIgnoreCase))) -or
+           ($rightTree -and ($rightPath -eq '.' -or $leftPath.StartsWith($rightPath + '/', [StringComparison]::OrdinalIgnoreCase)))
 }
 
 function Get-ClaimId([string]$Owner, [string]$RelativePath, [string]$Scope) {
@@ -103,12 +109,29 @@ function Get-ClaimId([string]$Owner, [string]$RelativePath, [string]$Scope) {
     return ([BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
 }
 
+function Write-Claim([string]$ClaimPath, [object]$Claim) {
+    # Publish complete JSON even if a process is terminated during a renewal.
+    $pending = Join-Path $claimsRoot ([IO.Path]::GetRandomFileName())
+    try {
+        [IO.File]::WriteAllText($pending, ($Claim | ConvertTo-Json -Compress))
+        if ([IO.File]::Exists($ClaimPath)) {
+            [IO.File]::Replace($pending, $ClaimPath, [Management.Automation.Language.NullString]::Value)
+        } else {
+            [IO.File]::Move($pending, $ClaimPath)
+        }
+    } finally {
+        if ([IO.File]::Exists($pending)) { [IO.File]::Delete($pending) }
+    }
+}
+
 function Invoke-WithRegistryLock([scriptblock]$Body) {
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     $stream = $null
     while ($null -eq $stream) {
         try {
-            $stream = [IO.File]::Open($lockPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            # The operating system releases the exclusive handle even if its owner is killed.
+            $stream = [IO.FileStream]::new($lockPath, [IO.FileMode]::OpenOrCreate,
+                [IO.FileAccess]::Write, [IO.FileShare]::None, 4096, [IO.FileOptions]::DeleteOnClose)
         } catch [IO.IOException] {
             if ([DateTime]::UtcNow -ge $deadline) { throw 'Timed out waiting for the Fusion guard registry lock.' }
             Start-Sleep -Milliseconds 100
@@ -116,7 +139,6 @@ function Invoke-WithRegistryLock([scriptblock]$Body) {
     }
     try { & $Body } finally {
         $stream.Dispose()
-        Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -141,7 +163,9 @@ switch ($Command) {
     'claim' {
         if ([string]::IsNullOrWhiteSpace($Agent)) { throw 'claim requires -Agent.' }
         if ($null -eq $Path -or $Path.Count -eq 0) { throw 'claim requires one or more -Path values.' }
-        $requested = @($Path | ForEach-Object { [pscustomobject]@{ agent = $Agent; path = Get-RelativeProjectPath $_; mode = $Mode } })
+        $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        $paths = @($Path | ForEach-Object { Get-RelativeProjectPath $_ } | Where-Object { $seen.Add($_) })
+        $requested = @($paths | ForEach-Object { [pscustomobject]@{ agent = $Agent; path = $_; mode = $Mode } })
         $result = Invoke-WithRegistryLock {
             $expired = Remove-ExpiredClaims
             $existing = @(Read-Claims)
@@ -161,7 +185,11 @@ switch ($Command) {
                 $id = Get-ClaimId $Agent $request.path $request.mode
                 $claimPath = Join-Path $claimsRoot "$id.json"
                 $claim = [pscustomobject]@{ agent = $Agent; path = $request.path; mode = $request.mode; createdAt = [DateTimeOffset]::UtcNow.ToString('o'); expiresAt = $expiresAt }
-                $claim | ConvertTo-Json -Compress | Set-Content -LiteralPath $claimPath -Encoding UTF8 -NoNewline
+                $previous = $existing | Where-Object {
+                    $_.agent -eq $Agent -and $_.mode -eq $request.mode -and $_.path.TrimEnd('/') -eq $request.path
+                } | Select-Object -First 1
+                if ($previous) { $claimPath = $previous.claimFile }
+                Write-Claim $claimPath $claim
                 $created += $claim
             }
             return [pscustomobject]@{ ok = $true; kind = 'claim-accepted'; project = $projectRoot; expiredRemoved = $expired; claims = $created }
@@ -200,32 +228,56 @@ switch ($Command) {
         $watcher.IncludeSubdirectories = $true
         $watcher.NotifyFilter = [IO.NotifyFilters]'FileName, DirectoryName, LastWrite, Size'
         $sourceId = 'fusion-guard-' + [Guid]::NewGuid().ToString('N')
-        $subscription = Register-ObjectEvent -InputObject $watcher -EventName Changed -SourceIdentifier $sourceId
-        $watcher.EnableRaisingEvents = $true
-        Write-Json ([pscustomobject]@{ ok = $true; kind = 'watch-started'; project = $projectRoot; intervalSeconds = $IntervalSeconds })
+        $ids = "$sourceId.*"
+        $emitted = 0
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        $nextStatus = $IntervalSeconds
+        $waitSeconds = $IntervalSeconds
+        if ($DurationSeconds) { $waitSeconds = 1 }
         try {
-            while ($true) {
-                $event = Wait-Event -SourceIdentifier $sourceId -Timeout $IntervalSeconds
+            foreach ($type in 'Created', 'Changed', 'Deleted', 'Renamed', 'Error') {
+                Register-ObjectEvent -InputObject $watcher -EventName $type -SourceIdentifier "$sourceId.$type"
+            }
+            $watcher.EnableRaisingEvents = $true
+            $clock.Restart()
+            Write-Json ([pscustomobject]@{ ok = $true; kind = 'watch-started'; project = $projectRoot; intervalSeconds = $IntervalSeconds })
+            while (-not $DurationSeconds -or $clock.Elapsed.TotalSeconds -lt $DurationSeconds) {
+                $event = Wait-Event -SourceIdentifier $ids -Timeout $waitSeconds
                 if ($null -ne $event) {
-                    $args = $event.SourceEventArgs
-                    $relative = Get-RelativeProjectPath $args.FullPath
+                    $change = $event.SourceEventArgs
                     Remove-Event -EventIdentifier $event.EventIdentifier -ErrorAction SilentlyContinue
-                    if (-not (Test-IgnoredPath $relative)) {
+                    if ($event.SourceIdentifier -eq "$sourceId.Error") { throw $change.GetException() }
+                    $relative = Get-RelativeProjectPath $change.FullPath
+                    $oldPath = $null
+                    if ($change.ChangeType -eq 'Renamed') { $oldPath = Get-RelativeProjectPath $change.OldFullPath }
+                    $visible = -not (Test-IgnoredPath $relative)
+                    if ($visible -or ($oldPath -and -not (Test-IgnoredPath $oldPath))) {
                         $claims = @(Invoke-WithRegistryLock { Remove-ExpiredClaims | Out-Null; Read-Claims })
                         $covers = @($claims | Where-Object {
-                            $probe = [pscustomobject]@{ path = $relative; mode = 'file' }
-                            Test-Overlap $probe $_
+                            (Test-Overlap @{ path = $relative; mode = 'file' } $_) -or
+                            ($oldPath -and (Test-Overlap @{ path = $oldPath; mode = 'file' } $_))
                         } | Select-Object agent, path, mode, expiresAt)
-                        Write-Json ([pscustomobject]@{ ok = $true; kind = 'filesystem-event'; changeType = [string]$args.ChangeType; path = $relative; timestamp = [DateTimeOffset]::UtcNow.ToString('o'); activeClaims = $covers })
+                        $record = @{ ok = $true; kind = 'filesystem-event'; changeType = [string]$change.ChangeType; path = $relative; timestamp = $event.TimeGenerated.ToUniversalTime().ToString('o'); activeClaims = $covers }
+                        if ($oldPath) { $record.oldPath = $oldPath }
+                        Write-Json $record
+                        $emitted++
                     }
-                } else {
-                    $snapshot = Invoke-WithRegistryLock { Remove-ExpiredClaims | Out-Null; $claims = @(Read-Claims); $detectedConflicts = @(Get-Conflicts $claims); [pscustomobject]@{ activeClaims = $claims.Count; conflicts = $detectedConflicts } }
-                    if (@($snapshot.conflicts).Count -gt 0) { Write-Json ([pscustomobject]@{ ok = $false; kind = 'active-claim-conflict'; project = $projectRoot; conflicts = $snapshot.conflicts }) }
                 }
+                if ($MaxEvents -and $emitted -ge $MaxEvents) { break }
+                if ($clock.Elapsed.TotalSeconds -ge $nextStatus -and (-not $DurationSeconds -or $clock.Elapsed.TotalSeconds -lt $DurationSeconds)) {
+                    $snapshot = Invoke-WithRegistryLock { Remove-ExpiredClaims | Out-Null; $claims = @(Read-Claims); $detectedConflicts = @(Get-Conflicts $claims); [pscustomobject]@{ activeClaims = $claims.Count; conflicts = $detectedConflicts } }
+                    $nextStatus = $clock.Elapsed.TotalSeconds + $IntervalSeconds
+                    if (@($snapshot.conflicts).Count -gt 0) {
+                        Write-Json ([pscustomobject]@{ ok = $false; kind = 'active-claim-conflict'; project = $projectRoot; conflicts = $snapshot.conflicts })
+                        $emitted++
+                    }
+                }
+                if ($MaxEvents -and $emitted -ge $MaxEvents) { break }
             }
         } finally {
-            Unregister-Event -SourceIdentifier $sourceId -ErrorAction SilentlyContinue
             $watcher.Dispose()
+            Unregister-Event -SourceIdentifier $ids -ErrorAction SilentlyContinue
+            Remove-Event -SourceIdentifier $ids -ErrorAction SilentlyContinue
         }
     }
 }
