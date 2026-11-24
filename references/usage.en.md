@@ -2,7 +2,92 @@
 
 [简体中文](usage.md) · **English**
 
-Try the file handoff below first. It uses a temporary project and runs in Windows PowerShell 5.1 or PowerShell 7. Python is optional for this exercise. To connect a client, see [installation and configuration](../README.md). For parameter defaults, response fields and path matching, see the [protocol reference](protocol.en.md).
+The CLI walkthrough below uses Windows PowerShell 5.1 or PowerShell 7. For tool parameters and return values, see the [protocol reference](protocol.en.md).
+
+## Setup
+
+Clone the tool in PowerShell, or open an existing clone. To install it as a Codex skill, use the alternate clone command under [Optional Codex skill](#optional-codex-skill).
+
+```powershell
+git clone https://github.com/wangyuchen5110/local-fusion-conflict-guard.git
+Set-Location .\local-fusion-conflict-guard
+```
+
+For a stdio MCP client, use Python 3.10 or newer. From the tool repository, replace the example project path with the existing Windows working tree all agents will edit. If you use the `python` launcher, substitute `python` for `py -3`.
+
+```powershell
+py -3 --version
+py -3 -m venv .venv
+$python = (Resolve-Path .\.venv\Scripts\python.exe).Path
+& $python -m pip install -r .\requirements-mcp.txt
+$server = (Resolve-Path .\scripts\mcp_server.py).Path
+$project = (Resolve-Path -LiteralPath 'D:\work\my-project').Path
+& $python $server --help
+```
+
+### MCP clients
+
+Run the block for your client in the same PowerShell window. The `.cmd` or `.exe` entry point preserves `--` when an npm PowerShell wrapper is installed.
+
+**Codex CLI**
+
+```powershell
+$codexCli = (Get-Command codex -CommandType Application | Select-Object -First 1).Source
+& $codexCli mcp add fusion-guard -- "$python" "$server" --project "$project"
+& $codexCli mcp get fusion-guard
+```
+
+**Claude Code**
+
+```powershell
+$claudeCli = (Get-Command claude -CommandType Application | Select-Object -First 1).Source
+Push-Location -LiteralPath $project
+try {
+    & $claudeCli mcp add --scope local --transport stdio fusion-guard -- "$python" "$server" --project "$project"
+    & $claudeCli mcp get fusion-guard
+} finally {
+    Pop-Location
+}
+```
+
+Codex registers the name in your user configuration. Use a distinct name for each project. Claude Code uses a local registration in the project directory.
+
+In Cursor, merge the entry below into the project’s `.cursor/mcp.json`, replacing the three example paths. Other local stdio hosts use the same executable and ordered arguments. [Cursor MCP documentation](https://cursor.com/docs/mcp)
+
+```json
+{
+  "mcpServers": {
+    "fusion-guard": {
+      "type": "stdio",
+      "command": "D:/tools/local-fusion-conflict-guard/.venv/Scripts/python.exe",
+      "args": [
+        "D:/tools/local-fusion-conflict-guard/scripts/mcp_server.py",
+        "--project",
+        "D:/work/my-project"
+      ]
+    }
+  }
+}
+```
+
+In a fresh client session, call `status` with `{}` and verify that `project` is your target directory. Try the handoff exercise below to verify cooperation.
+
+After installing the MCP dependencies, run the integration suite from the tool repository.
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+### Optional Codex skill
+
+On a first install, use this clone location to make `$local-fusion-conflict-guard` discoverable by Codex. If it is already installed, use the existing skill. MCP clients still need their server registration. [Codex skill directories](https://learn.chatgpt.com/docs/build-skills)
+
+```powershell
+$skillDir = Join-Path $HOME '.agents\skills\local-fusion-conflict-guard'
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $skillDir) | Out-Null
+git clone https://github.com/wangyuchen5110/local-fusion-conflict-guard.git "$skillDir"
+Set-Location -LiteralPath $skillDir
+```
 
 ## Hand a file from one agent to another in a single terminal
 
@@ -117,8 +202,8 @@ For a bounded CLI run, use `& $guard watch -Project $demo -DurationSeconds 10 -M
 | --- | --- |
 | Clients cannot see each other's claims | Call `status` on each side, compare `project` and confirm both tasks use the same local working tree. Pass `-Project` explicitly to the CLI. Give each task on a shared MCP connection a distinct label. |
 | `claim` returns a conflict | Inspect `agent`, `path`, `mode` and `expiresAt` in each `conflicts` entry. A `tree` claim on a parent directory also covers the file. Wait for the handoff or request an unrelated path separately. |
-| No MCP tools appear or the `mcp` module is missing | Check the absolute paths of the Python interpreter, `mcp_server.py` and the project in the client config. Run `-m pip show mcp` with that exact interpreter. Follow the README to install into that environment if needed, then reconnect. |
-| Registration reports `unknown option '--project'` | In Windows PowerShell, select the client's `.exe` or `.cmd` as shown in the README. Put `--` between the server name and the interpreter and check the saved launch arguments. |
+| No MCP tools appear or the `mcp` module is missing | Check the absolute paths of the Python interpreter, `mcp_server.py` and the project in the client config. Run `-m pip show mcp` with that exact interpreter. Follow [Setup](#setup) to install into that environment if needed, then reconnect. |
+| Registration reports `unknown option '--project'` | In Windows PowerShell, select the client's `.exe` or `.cmd` as shown in [Setup](#setup). Put `--` between the server name and the interpreter and check the saved launch arguments. |
 | PowerShell blocks script execution | Run `Get-ExecutionPolicy -List` in the PowerShell used to run the script. Use a script execution method permitted by the machine's policy. The MCP server invokes the same PowerShell script. |
 | Missing project, path outside the project or access denied | `--project` must point to an existing directory where the user can write registry data. `paths` are relative to this directory unless given as absolute paths inside it. Check `status.project`, the file location and access to the project's `.codex` directory. |
 | `status` fails, the registry lock times out, or `Cannot read claim file` appears | Pause writes and keep the error, including the affected path. Check storage, permissions and other active clients, then retry `status`. If a record is damaged, stop every participant, back up and inspect the reported record, and reacquire claims once the registry is consistent. |
@@ -138,4 +223,4 @@ If you copied the skill from the repository, refresh the copy using the same ins
 
 To disconnect the guard, release active claims and stop the watcher. For Codex CLI, run `codex mcp remove fusion-guard`, substituting your registered name if it differs. For a JSON-configured client, remove the guard's entry from `mcpServers` and reconnect. Remove guard-specific instructions added to the target project. You can then remove the dedicated skill copy, tool checkout and its virtual environment. The project registry is confined to `.codex/fusion-agent-guard/`. Once all participants have stopped using it, you can keep it or verify and remove that specific subdirectory. Other `.codex` settings and business source files belong to the project.
 
-If you registered the server with Claude Code using the README, run `claude mcp remove --scope local fusion-guard` in the original target project to remove its local registration.
+If you registered the server with Claude Code using the project-local registration above, run `claude mcp remove --scope local fusion-guard` in the original target project to remove its local registration.

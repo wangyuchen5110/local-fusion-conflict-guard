@@ -2,7 +2,92 @@
 
 **简体中文** · [English](usage.en.md)
 
-第一次使用，先做下面的文件交接演练。它只需要 Windows PowerShell 5.1 或 PowerShell 7，使用临时项目，无须安装 Python。要让实际客户端调用工具，参见[安装与客户端配置](../README.zh-CN.md)。查默认值、返回字段或路径匹配规则，见[协议参考](protocol.md)。
+下方的 CLI 演练适用于 Windows PowerShell 5.1 或 PowerShell 7。参数和返回值见[协议参考](protocol.md)。
+
+## 接入
+
+在 PowerShell 中克隆工具，或进入已有的工具仓库。要同时安装为 Codex skill，首次克隆时可以改用[可选的 Codex skill](#可选的-codex-skill) 小节里的命令。
+
+```powershell
+git clone https://github.com/wangyuchen5110/local-fusion-conflict-guard.git
+Set-Location .\local-fusion-conflict-guard
+```
+
+使用本地 stdio MCP 客户端需要 Python 3.10 或更高版本。在工具仓库根目录运行以下命令，把示例项目路径换成所有 agent 要编辑的同一份 Windows 工作目录。只有 `python` 命令时，用 `python` 替换 `py -3`。
+
+```powershell
+py -3 --version
+py -3 -m venv .venv
+$python = (Resolve-Path .\.venv\Scripts\python.exe).Path
+& $python -m pip install -r .\requirements-mcp.txt
+$server = (Resolve-Path .\scripts\mcp_server.py).Path
+$project = (Resolve-Path -LiteralPath 'D:\work\my-project').Path
+& $python $server --help
+```
+
+### MCP 客户端
+
+在同一 PowerShell 窗口执行与你的客户端对应的命令。使用 `.cmd` 或 `.exe` 入口可以在 npm 同时提供 PowerShell 包装脚本时正确传递 `--`。
+
+**Codex CLI**
+
+```powershell
+$codexCli = (Get-Command codex -CommandType Application | Select-Object -First 1).Source
+& $codexCli mcp add fusion-guard -- "$python" "$server" --project "$project"
+& $codexCli mcp get fusion-guard
+```
+
+**Claude Code**
+
+```powershell
+$claudeCli = (Get-Command claude -CommandType Application | Select-Object -First 1).Source
+Push-Location -LiteralPath $project
+try {
+    & $claudeCli mcp add --scope local --transport stdio fusion-guard -- "$python" "$server" --project "$project"
+    & $claudeCli mcp get fusion-guard
+} finally {
+    Pop-Location
+}
+```
+
+Codex 会将名称注册到用户配置，可为不同项目使用不同名称。Claude Code 示例会在目标项目目录创建本机注册。
+
+Cursor 用户将下方条目合并到项目的 `.cursor/mcp.json`，并替换三个示例路径。其他本地 stdio 宿主使用相同的可执行文件和有序参数。 [Cursor MCP 文档](https://cursor.com/docs/mcp)
+
+```json
+{
+  "mcpServers": {
+    "fusion-guard": {
+      "type": "stdio",
+      "command": "D:/tools/local-fusion-conflict-guard/.venv/Scripts/python.exe",
+      "args": [
+        "D:/tools/local-fusion-conflict-guard/scripts/mcp_server.py",
+        "--project",
+        "D:/work/my-project"
+      ]
+    }
+  }
+}
+```
+
+在新的客户端会话中调用 `status`，传 `{}`，确认返回的 `project` 指向目标项目，再用下方的交接演练验证多个任务能看到彼此的占用。
+
+安装 MCP 依赖后，可在工具仓库根目录运行集成测试。
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+### 可选的 Codex skill
+
+首次安装时将工具克隆到此位置，Codex 即可发现 `$local-fusion-conflict-guard`。已安装的用户可沿用现有副本。通过 MCP 调用时仍需注册服务。[Codex skill 目录说明](https://learn.chatgpt.com/docs/build-skills)
+
+```powershell
+$skillDir = Join-Path $HOME '.agents\skills\local-fusion-conflict-guard'
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $skillDir) | Out-Null
+git clone https://github.com/wangyuchen5110/local-fusion-conflict-guard.git "$skillDir"
+Set-Location -LiteralPath $skillDir
+```
 
 ## 在一个终端演练两名 agent 交接文件
 
@@ -117,8 +202,8 @@ Add-Content -LiteralPath (Join-Path $demo 'notes.txt') -Value 'watch demo' -Enco
 | --- | --- |
 | 两个客户端看不到对方的占用 | 两边都调用 `status`，逐项核对 `project`，并确认任务在同一份本地工作树中。CLI 总是显式传 `-Project`。同一 MCP 连接里的任务要分别命名。 |
 | `claim` 返回冲突 | 核对 `conflicts[].agent`、`path`、`mode`、`expiresAt`。上层目录的 `tree` 占用也会覆盖当前文件。等待交接或先单独申请无关路径。 |
-| MCP 未列出工具，或提示缺少 `mcp` 模块 | 核对客户端配置里的 Python、`mcp_server.py` 和项目三个绝对路径。用配置里的那个 Python 执行 `-m pip show mcp`；需要安装时按 README 在同一环境执行安装命令，之后重新连接。 |
-| 注册时报 `unknown option '--project'` | 在 Windows PowerShell 中按 README 选用客户端的 `.exe` 或 `.cmd`，把 `--` 放在服务名与解释器之间，再检查保存的启动参数。 |
+| MCP 未列出工具，或提示缺少 `mcp` 模块 | 核对客户端配置里的 Python、`mcp_server.py` 和项目三个绝对路径。用配置里的那个 Python 执行 `-m pip show mcp`；需要安装时按[接入](#接入)说明在同一环境执行安装命令，之后重新连接。 |
+| 注册时报 `unknown option '--project'` | 在 Windows PowerShell 中按[接入](#接入)说明选用客户端的 `.exe` 或 `.cmd`，把 `--` 放在服务名与解释器之间，再检查保存的启动参数。 |
 | PowerShell 提示禁止执行脚本 | 在运行脚本的 PowerShell 中用 `Get-ExecutionPolicy -List` 查看生效策略，按当前机器允许的脚本运行方式处理。MCP 也会调用同一份 PowerShell 脚本。 |
 | 提示项目不存在、路径越界或拒绝访问 | `--project` 必须是已存在、可写入协调数据的目录，`paths` 相对于它。核对 `status.project` 和文件位置，确认当前用户能访问该项目的 `.codex` 目录。 |
 | 状态读取失败、锁等待超时或出现 `Cannot read claim file` | 暂停写入，保留报错及其路径。先核对磁盘与访问权限、其他客户端是否仍在工作，再重试 `status`。记录损坏时先停止所有参与者、备份并核对报错指向的记录，恢复一致后重新申请。 |
@@ -138,4 +223,4 @@ git pull --ff-only
 
 停用时，先释放占用并关闭监听。Codex CLI 里注册名为 `fusion-guard` 的服务可用 `codex mcp remove fusion-guard` 移除；若使用其他名称，换成实际注册名。JSON 客户端只需移除本工具的 `mcpServers` 条目并重新连接，同时移除为本工具添加的项目指令。按需移除专用的 skill 安装副本、工具克隆及其虚拟环境。项目中的 `.codex/fusion-agent-guard/` 仅保存协调数据，全部参与者停用后可保留，或核实这个专用子目录后手动清理。业务源码和其他 `.codex` 配置属于项目本身。
 
-按 README 在 Claude Code 注册过的用户，可在原目标项目目录运行 `claude mcp remove --scope local fusion-guard` 移除该项目的本地注册。
+使用上述项目本地注册方式的 Claude Code 用户，可在原目标项目目录运行 `claude mcp remove --scope local fusion-guard` 移除该项目的本地注册。
