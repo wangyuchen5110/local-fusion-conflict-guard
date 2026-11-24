@@ -2,12 +2,12 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-Help local coding agents share a Windows project. Each agent claims a file before editing and releases it when done.
+See who is changing what in a shared Windows project. Each agent announces its goal and files before editing. Teammates see that plan when they join or request files, and overlapping requests identify the holder and what they're doing.
 
 **Send this to your agent:**
 
-> Download https://github.com/wangyuchen5110/local-fusion-conflict-guard and use it to coordinate edits in my current project.
+> Download https://github.com/wangyuchen5110/local-fusion-conflict-guard for this project. Check what the other agents are doing, announce your changes, and coordinate any overlap before writing.
 
-From the project root, the agent runs the downloaded `start.ps1` to get its task ID and guard script path. Other tasks reuse the project copy with their own IDs. Requires Windows PowerShell 5.1 or PowerShell 7. [Optional MCP setup](references/usage.en.md#setup)
+From the project root, the agent runs the downloaded `start.ps1`. Agents working toward one goal use the same task name and share progress, questions and handoffs on its board. Requires Windows PowerShell 5.1 or 7. [Optional MCP setup](references/usage.en.md#setup)
 
 [Agent instructions](SKILL.en.md) · [User guide](references/usage.en.md) · [Command reference](references/protocol.en.md)

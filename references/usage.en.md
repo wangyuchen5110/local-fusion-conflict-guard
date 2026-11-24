@@ -11,12 +11,41 @@ Have the agent download the repository (Git clone or ZIP) and run the downloaded
 ```powershell
 $task = & 'D:\downloads\local-fusion-conflict-guard\start.ps1' | ConvertFrom-Json
 $guard = $task.guard
-& $guard claim -Agent $task.agent -Path 'src/api.ts'
+$task.peers
+& $guard board -Project $task.project
 ```
 
-Check `$task.project`. After `claim` returns `ok: true`, read the current files and edit them. At the end run `& $guard release -Agent $task.agent`. If later commands run in fresh shells, keep the returned absolute `guard` path and `agent` ID and reuse their literal values. Pass `-Project` to the launcher when starting from a different directory.
+Check `$task.project` and inspect `$task.peers` for live claims by other agents. `board` adds the shared task conversation. If a later command runs in a fresh shell, reuse the same literal `guard` path and `agent` ID. Use `-Project` to select the project when launching from another directory.
 
 The project copy lives under `.agents/skills/local-fusion-conflict-guard`. Another task can rerun `start.ps1` to reuse a matching installation and get its own identity. A mismatch leaves the existing files in place. To use the existing installation, call its `scripts/fusion-guard.ps1 join`. Alternatively, from the target project, run `git clone https://github.com/wangyuchen5110/local-fusion-conflict-guard.git .agents/skills/local-fusion-conflict-guard` once and call `join` in that clone. Obtain one identity per task.
+
+### Share the plan before touching a file
+
+Run this exercise in one terminal after setup. A and B share a temporary project and the task name `status-api`. A takes the endpoint while B starts its contract test. The public claim tells B what A is doing before either agent touches a file.
+
+```powershell
+$demo = (New-Item -ItemType Directory -Path (Join-Path $env:TEMP ([guid]::NewGuid().ToString('N')))).FullName
+$a = & $guard join -Project $demo -Agent api | ConvertFrom-Json
+& $guard claim -Project $demo -Agent $a.agent -Task status-api -Message 'Implement GET /status; response field: ready' -Path 'api.ts'
+if ($LASTEXITCODE -ne 0) { throw 'API claim failed' }
+
+$b = & $guard join -Project $demo -Agent tests | ConvertFrom-Json
+$b.peers | Select-Object agent,path,task,message
+& $guard board -Project $demo -Task status-api
+& $guard claim -Project $demo -Agent $b.agent -Task status-api -Message 'Test the ready field' -Path 'api.test.ts'
+if ($LASTEXITCODE -ne 0) { throw 'Test claim failed' }
+& $guard post -Project $demo -Agent tests -Task status-api -Kind question -To api -Message 'Is ready a boolean?'
+& $guard post -Project $demo -Agent api -Task status-api -Kind handoff -To tests -Message 'Yes. Assert that ready is true.'
+& $guard board -Project $demo -Task status-api
+& $guard release -Project $demo -Agent tests
+& $guard release -Project $demo -Agent api
+```
+
+At B's join, `peers` contains A's `api.ts` claim and its purpose. The first board read shows both the live lease in `activeWork` and the plan in `events`. In a real task A can implement the endpoint while B writes the test under its own lease. An unexpected conflict identifies the holder, path and available intent in `conflicts`. Contact the holder on the board and choose a free path; retry the contested path only after a handoff.
+
+MCP clients use the same `board`, `claim` and `post` operations with snake_case arguments. Pass `{"task":"status-api"}` to `board`; to request the next messages, reuse the returned `nextAfter` as `after`. An addressed note remains visible to everyone reading this task. Agents see new messages when they check the board, so read it again before dependent work or after publishing a handoff.
+
+For two small changes to **different passages of one existing UTF-8 file**, read the current file and agree on separate literals. Each participant can call `edit`, e.g. `{"path":"api.ts","old_text":"timeout: 5","new_text":"timeout: 10","agent":"api"}`, without taking an exclusive lease. The guard rereads the file under the shared lock. On `stale` or `ambiguous`, read it again and choose a unique literal that still matches the intended edit. Respect any `claimed` conflict. For direct writes through an editor, continue to claim paths first.
 
 ### Optional MCP setup
 
@@ -153,7 +182,7 @@ The server returns a claim conflict as an ordinary MCP tool result. Check the re
 
 **Project instructions for agents.** Put the following in a project instructions file your host reads, or include it in each task sent by your orchestrator.
 
-> Before editing, use Fusion Guard to claim the paths you intend to change in a single request. Read the current file after the claim succeeds. Pause writes to those paths on a conflict, tool error or lease expiry. After reacquiring them, reread the file before continuing. Renew long-running claims before expiry. At the end of the task, release all claims held by its identity.
+> Read the board before choosing work. Identify the shared task and include your intention and paths in your claim. Check the result before any direct write, then reread the files. Ask questions, report progress and hand off results in the same task. For small distinct passages of one file, use the guarded `edit` tool and inspect its result. Reconcile conflicts with the holder before retrying. Renew leases before they expire and release them after all writes finish.
 
 If an agent cannot call tools, its host can follow the same procedure when creating, overwriting, renaming or deleting files. Claim both the old and new paths for a rename. Include files that formatters or generators will change. Use `mode: "tree"` when a task needs exclusive access to a directory and its descendants. Editors and other processes can write directly to disk. To protect their writes, integrate the claim check into those entry points too.
 

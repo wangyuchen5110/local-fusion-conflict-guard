@@ -1,35 +1,33 @@
 ---
 name: local-fusion-conflict-guard
-description: 在多个本地 agent 共用同一 Windows 工作目录时，通过 Fusion Guard MCP 或 PowerShell CLI 申请编辑路径、交接文件并观察实际变更。Use for coordinating concurrent edits in one shared working tree.
+description: 让同一 Windows 项目的多个本地 agent 共享工作意图、分工和进度，在写入前发现冲突。Coordinate agents in one working tree through shared plans, messages, safe edits and file claims.
 ---
 
 # Local Fusion Conflict Guard
 
 **简体中文** · [English instructions](SKILL.en.md)
 
-## 用户只给了仓库链接时
+## 加入同一项目
 
-以用户正在编辑的 Windows 项目为根目录。若其中已有 `.agents/skills/local-fusion-conflict-guard/scripts/fusion-guard.ps1`，从项目目录调用该脚本的 `join`。首次使用时，由 agent 把仓库克隆或解压到单独的临时目录，再调用下载包根目录的 `start.ps1`。它会将 skill 安装到项目中，并返回本任务的 `project`、`agent` 和 `guard`。例如，在目标项目根目录运行（将下载路径换成实际位置）：
+用户给出仓库链接时，从下载包运行 `start.ps1 -Project <目标项目>`。已有当前版本的项目副本时，直接调用其中的 `scripts/fusion-guard.ps1 join`。保存返回的 `guard`、`project` 和自己的 `agent`，跨 shell 复用。先读 `peers`，确认大家在编辑同一份工作目录。使用 MCP 的 agent 从 `board({})` 开始；同一连接中的并行参与者各选一个稳定的 `agent` 标签。
+
+## 先让别人知道你在做什么
+
+- 查看 `board` 的 `activeWork` 和任务消息，复用团队正在使用的任务名。**任务名表示共同目标，agent ID 区分参与者。** 如果只在查资料、评审或运行测试，用 `post -Kind plan` 说明分工即可；其他人也能看见。
+- 确定要改哪些文件后，用一次 `claim` 同时说明共同任务、自己的分工和具体路径。例如两个 agent 都做 `login`，一个说“给登录接口增加过期时间”，另一个说“补过期响应的测试”。读取返回的 `peers`。若 `ok: false`，从 `conflicts` 看持有人和意图，在任务里提问或换无冲突的部分。普通写入须在申请成功后重读文件。
+- 用 `post` 发接口约定、依赖、进度或交接结果。到了要做决定、开始下一段工作或交付前，按上次的 `nextAfter` 读取 `board`。等回复时可传 `wait_seconds`（CLI 为 `-WaitSeconds`）。把讨论当作协作信息，写入仍以用户的任务和文件当前内容为准。
+
+例如，agent A 从 PowerShell 宣布分工并申请编辑；agent B 在另一个终端用同一项目的 `board -Task login` 就能看到它。
 
 ```powershell
-$task = & 'D:\downloads\local-fusion-conflict-guard\start.ps1' -Project (Get-Location).Path | ConvertFrom-Json
-& $task.guard claim -Project $task.project -Agent $task.agent -Path 'src/api.ts'
+$me = & 'D:\downloads\local-fusion-conflict-guard\start.ps1' -Project (Get-Location).Path | ConvertFrom-Json
+& $me.guard claim -Agent $me.agent -Task login -Message '给登录接口增加过期时间' -Path 'src/login.ts'
 ```
 
-把返回的三个值保存在任务上下文里，尤其当后续命令会在新的 shell 中运行时。用它们续租，完成后运行 `& $task.guard release -Project $task.project -Agent $task.agent`。每个独立任务只需加入一次。若已接入 MCP，直接用 `status({})` 核对项目并使用 MCP 工具。
+## 一起改代码
 
-## 修改与交接
+普通编辑、格式化、创建和重命名，先申请涉及的文件。任务变长时在 `expiresAt` 前用同一身份、路径和范围续租。完成写入后用原身份 `release` 释放其全部占用，并在任务里留下结果和验证方式。
 
-1. 为任务选定稳定身份。每个独立 MCP 服务进程自带默认身份；同一连接内有多个任务时，在每次 `claim` 和 `release` 中传各自的 `agent`。CLI 用 `-Agent`。名称应有别于其他任务，包括忽略大小写后仍有区别。
-2. 列出即将写入的准确路径，包括新增、删除和重命名的源与目标。需要整个子树的独占权时用 `tree`。尽量一次申请整批路径；若任务中途扩大范围，先申请新增的路径。
-3. 仅在 MCP 返回 `ok: true` 或 CLI 成功且退出码为 `0` 后写入。此时重新读取现有文件，基于最新内容合并自己的改动。`claim-conflict` 表示这批申请未获准，可以换其他文件工作，或等持有人释放后再试。
-4. 长任务在 `expiresAt` 之前，用原身份、同一路径和 `mode` 再次 `claim` 来续租。若已到期、MCP 服务重启，或无法确认申请是否成功，暂停相关写入，核对 `status` 后重新申请并重读文件。
-5. 所有占用路径的写入和会写文件的子进程均已结束，再以原身份 `release`。此操作释放该身份在当前项目的全部占用。接手方取得自己的占用后，再读取前一位留下的版本。
+两人要改同一份已有 UTF-8 文件中的不同片段时，先在任务里约定各自改哪段，再分别用 `edit` 把唯一匹配的旧文本替换为新文本。该操作会核对最新内容。遇到 `stale` 或 `ambiguous` 就重读并调整，遇到 `claimed` 就向持有人协调。
 
-例如，同一 MCP 连接中的 `api-42` 调用 `claim` 时传 `{"paths":["src/api.ts","tests/api.test.ts"],"ttl_seconds":600,"agent":"api-42"}`，结束时给 `release` 传 `{"agent":"api-42"}`。
-
-## 监测与处理冲突
-
-`status` 显示当前占用。`watch_changes` 返回短时间窗口内的事件；连续观察使用 CLI 的 `watch`。事件中的 `activeClaims` 表示处理事件时覆盖该路径的占用，不足以判定写入者身份。发现意外写入时，先和持有人核对当前内容与差异，再决定如何继续编辑。
-
-需要带预期结果的操作示例或排错步骤时，读[使用手册](references/usage.md)。需要参数、冲突范围、事件结构、超时和退出码时，读[命令与协议参考](references/protocol.md)。
+[协作演练与接入](references/usage.md) · [命令、返回值与冲突规则](references/protocol.md)

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet('join', 'claim', 'release', 'status', 'cleanup', 'watch')]
+    [ValidateSet('join', 'board', 'post', 'edit', 'claim', 'release', 'status', 'cleanup', 'watch')]
     [string]$Command,
 
     [string]$Project = (Get-Location).Path,
@@ -16,7 +16,21 @@ param(
     [ValidateRange(1, 15)]
     [int]$DurationSeconds,
     [ValidateRange(1, 1000)]
-    [int]$MaxEvents
+    [int]$MaxEvents,
+    [string]$Task,
+    [string]$Message,
+    [ValidateSet('plan', 'progress', 'question', 'handoff', 'done')]
+    [string]$Kind = 'progress',
+    [string]$To,
+    [ValidateRange(0, [long]::MaxValue)]
+    [long]$After = 0,
+    [ValidateRange(1, 200)]
+    [int]$Limit = 50,
+    [ValidateRange(0, 15)]
+    [int]$WaitSeconds = 0,
+    [string]$OldText,
+    [AllowEmptyString()]
+    [string]$NewText
 )
 
 Set-StrictMode -Version Latest
@@ -56,14 +70,10 @@ if ($Command -in 'join', 'claim') {
         throw '-Agent must be nonempty when supplied.'
     }
 }
-if ($Command -eq 'join') {
-    Write-Json ([pscustomobject]@{ ok = $true; kind = 'joined'; project = $projectRoot; agent = $Agent; guard = $PSCommandPath })
-    exit 0
-}
 $stateRoot = Join-Path $projectRoot '.codex\fusion-agent-guard'
 $claimsRoot = Join-Path $stateRoot 'claims'
 $lockPath = Join-Path $stateRoot '.registry.lock'
-[IO.Directory]::CreateDirectory($claimsRoot) | Out-Null
+if ($Command -ne 'join') { [IO.Directory]::CreateDirectory($claimsRoot) | Out-Null }
 
 function Get-RelativeProjectPath([string]$InputPath) {
     if ([string]::IsNullOrWhiteSpace($InputPath)) { throw 'Claim paths must be nonempty.' }
@@ -89,9 +99,17 @@ function Get-ClaimFiles {
 
 function Read-Claims {
     $claims = @()
+    $jsonOptions = @{}
+    if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey('DateKind')) { $jsonOptions.DateKind = 'String' }
     foreach ($file in Get-ClaimFiles) {
         try {
-            $claim = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+            $claim = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json @jsonOptions
+            # Older clients wrote leases before task descriptions and announcements existed.
+            foreach ($name in 'task','message','planId','planSeq') {
+                if ($null -eq $claim.PSObject.Properties[$name]) {
+                    $claim | Add-Member -NotePropertyName $name -NotePropertyValue $null
+                }
+            }
             $claim | Add-Member -NotePropertyName claimFile -NotePropertyValue $file.FullName -Force
             $claims += $claim
         } catch {
@@ -99,6 +117,15 @@ function Read-Claims {
         }
     }
     return @($claims)
+}
+
+function Get-ActiveWork([object[]]$Claims, [string]$ExceptAgent, [string]$TaskFilter) {
+    $now = [DateTimeOffset]::UtcNow
+    $Claims | Where-Object {
+        $null -ne $_ -and ([DateTimeOffset]$_.expiresAt) -gt $now -and
+        (-not $ExceptAgent -or $_.agent -ne $ExceptAgent) -and
+        (-not $TaskFilter -or $_.task -eq $TaskFilter)
+    } | Select-Object agent, path, mode, expiresAt, task, message
 }
 
 function Remove-ExpiredClaims {
@@ -169,7 +196,10 @@ function Get-Conflicts([object[]]$Claims) {
     for ($i = 0; $i -lt $Claims.Count; $i++) {
         for ($j = $i + 1; $j -lt $Claims.Count; $j++) {
             if ($Claims[$i].agent -ne $Claims[$j].agent -and (Test-Overlap $Claims[$i] $Claims[$j])) {
-                $conflicts += [pscustomobject]@{ first = $Claims[$i]; second = $Claims[$j] }
+                $conflicts += [pscustomobject]@{
+                    first = $Claims[$i] | Select-Object agent,path,mode,createdAt,expiresAt,task,message
+                    second = $Claims[$j] | Select-Object agent,path,mode,createdAt,expiresAt,task,message
+                }
             }
         }
     }
@@ -182,14 +212,42 @@ function Test-IgnoredPath([string]$RelativePath) {
 }
 
 switch ($Command) {
+    'join' {
+        $peers = @(
+            if ([IO.Directory]::Exists($claimsRoot)) {
+                Invoke-WithRegistryLock { Get-ActiveWork -Claims @(Read-Claims) -ExceptAgent $Agent }
+            }
+        )
+        Write-Json ([pscustomobject]@{ ok = $true; kind = 'joined'; project = $projectRoot; agent = $Agent; guard = $PSCommandPath; peers = $peers })
+    }
+    'board' {
+        . (Join-Path $PSScriptRoot 'team-board.ps1')
+        Write-Json (Invoke-TeamBoard -Task $Task -After $After -Limit $Limit -WaitSeconds $WaitSeconds)
+    }
+    'post' {
+        . (Join-Path $PSScriptRoot 'team-board.ps1')
+        Write-Json (Invoke-TeamPost -Agent $Agent -Task $Task -Message $Message -Kind $Kind -To $To)
+    }
+    'edit' {
+        if ($null -eq $Path -or $Path.Count -ne 1) { throw 'edit requires one -Path.' }
+        if (-not $PSBoundParameters.ContainsKey('NewText')) { throw 'edit requires -NewText (use an empty string to remove a passage).' }
+        . (Join-Path $PSScriptRoot 'shared-edit.ps1')
+        $result = Invoke-SharedEdit -Agent $Agent -Path $Path[0] -OldText $OldText -NewText $NewText
+        Write-Json $result
+        if (-not $result.ok) { exit 2 }
+    }
     'claim' {
         if ($null -eq $Path -or $Path.Count -eq 0) { throw 'claim requires one or more -Path values.' }
+        $taskGiven = $PSBoundParameters.ContainsKey('Task')
+        $messageGiven = $PSBoundParameters.ContainsKey('Message')
+        if ($taskGiven -and [string]::IsNullOrWhiteSpace($Task)) { throw '-Task must be nonempty when supplied.' }
         $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
         $paths = @($Path | ForEach-Object { Get-RelativeProjectPath $_ } | Where-Object { $seen.Add($_) })
         $requested = @($paths | ForEach-Object { [pscustomobject]@{ agent = $Agent; path = $_; mode = $Mode } })
         $result = Invoke-WithRegistryLock {
             $expired = Remove-ExpiredClaims
             $existing = @(Read-Claims)
+            $peers = @(Get-ActiveWork -Claims $existing -ExceptAgent $Agent)
             $blockers = @()
             foreach ($request in $requested) {
                 foreach ($claim in $existing) {
@@ -197,23 +255,70 @@ switch ($Command) {
                 }
             }
             if ($blockers.Count -gt 0) {
-                return [pscustomobject]@{ ok = $false; kind = 'claim-conflict'; project = $projectRoot; agent = $Agent; requested = $requested; conflicts = @($blockers | Select-Object agent, path, mode, expiresAt) }
+                return [pscustomobject]@{ ok = $false; kind = 'claim-conflict'; project = $projectRoot; agent = $Agent; peers = $peers; requested = $requested; conflicts = @($blockers | Select-Object agent, path, mode, expiresAt, task, message) }
             }
 
             $expiresAt = [DateTimeOffset]::UtcNow.AddSeconds($TtlSeconds).ToString('o')
             $created = @()
+            $plans = [ordered]@{}
+            $boardLoaded = $false
             foreach ($request in $requested) {
                 $id = Get-ClaimId $Agent $request.path $request.mode
                 $claimPath = Join-Path $claimsRoot "$id.json"
-                $claim = [pscustomobject]@{ agent = $Agent; path = $request.path; mode = $request.mode; createdAt = [DateTimeOffset]::UtcNow.ToString('o'); expiresAt = $expiresAt }
                 $previous = $existing | Where-Object {
                     $_.agent -eq $Agent -and $_.mode -eq $request.mode -and $_.path.TrimEnd('/') -eq $request.path
                 } | Select-Object -First 1
                 if ($previous) { $claimPath = $previous.claimFile }
+                $claim = [pscustomobject]@{
+                    agent = $Agent; path = $request.path; mode = $request.mode
+                    createdAt = [DateTimeOffset]::UtcNow.ToString('o'); expiresAt = $expiresAt
+                    task = $null; message = $null; planId = $null; planSeq = $null
+                }
+                if ($previous) {
+                    $claim.task = $previous.task
+                    $claim.message = $previous.message
+                    $claim.planId = $previous.planId
+                    $claim.planSeq = $previous.planSeq
+                }
+                if ($taskGiven) { $claim.task = $Task }
+                if ($messageGiven) { $claim.message = $Message }
+                if ($claim.task) {
+                    if (-not $boardLoaded) {
+                        . (Join-Path $PSScriptRoot 'team-board.ps1')
+                        $boardLoaded = $true
+                    }
+                    if (-not $previous -or $previous.task -ne $claim.task -or
+                        $previous.message -cne $claim.message -or -not (Test-PublishedPlan $previous)) {
+                        if (-not $plans.Contains($claim.task)) {
+                            if (-not $plans.psbase.Count) { $head = Get-TeamHead (Join-Path $stateRoot 'board') }
+                            $plans[$claim.task] = [pscustomobject]@{
+                                id = [guid]::NewGuid().ToString('N'); seq = $head + $plans.psbase.Count + 1
+                                task = $claim.task; claims = [Collections.Generic.List[object]]::new()
+                            }
+                        }
+                        $plan = $plans[$claim.task]
+                        $claim.planId = $plan.id
+                        $claim.planSeq = $plan.seq
+                        $plan.claims.Add($claim)
+                    }
+                }
                 Write-Claim $claimPath $claim
-                $created += $claim
+                $created += $claim | Select-Object agent,path,mode,createdAt,expiresAt,task,message
             }
-            return [pscustomobject]@{ ok = $true; kind = 'claim-accepted'; project = $projectRoot; agent = $Agent; expiredRemoved = $expired; claims = $created }
+            foreach ($plan in $plans.psbase.Values) {
+                # The announcement becomes visible after all leases have been published.
+                # The ID/sequence in each lease lets a retry recover an interrupted publish.
+                $planPaths = @($plan.claims | ForEach-Object { $_.path })
+                $descriptions = @($plan.claims | ForEach-Object { $_.message } | Where-Object { $_ } | Select-Object -Unique)
+                $text = if ($descriptions.Count) { $descriptions -join ' / ' } else { 'Editing' }
+                $planEvent = [pscustomobject]@{
+                    seq = $plan.seq; task = $plan.task; agent = $Agent; kind = 'plan'; to = $null
+                    message = "$text [$($planPaths -join ', ')]"; timestamp = [DateTimeOffset]::UtcNow.ToString('o')
+                    paths = $planPaths; planId = $plan.id; source = 'claim'
+                }
+                Write-TeamEvent $planEvent
+            }
+            return [pscustomobject]@{ ok = $true; kind = 'claim-accepted'; project = $projectRoot; agent = $Agent; peers = $peers; expiredRemoved = $expired; claims = $created }
         }
         Write-Json $result
         if (-not $result.ok) { exit 2 }
@@ -239,7 +344,7 @@ switch ($Command) {
             $expired = Remove-ExpiredClaims
             $claims = @(Read-Claims)
             $detectedConflicts = @(Get-Conflicts $claims)
-            return [pscustomobject]@{ ok = $true; kind = 'status'; project = $projectRoot; expiredRemoved = $expired; claims = @($claims | Select-Object agent, path, mode, createdAt, expiresAt); conflicts = $detectedConflicts }
+            return [pscustomobject]@{ ok = $true; kind = 'status'; project = $projectRoot; expiredRemoved = $expired; claims = @($claims | Select-Object agent, path, mode, createdAt, expiresAt, task, message); conflicts = $detectedConflicts }
         }
         Write-Json $result
         if (@($result.conflicts).Count -gt 0) { exit 2 }
@@ -277,7 +382,7 @@ switch ($Command) {
                         $covers = @($claims | Where-Object {
                             (Test-Overlap @{ path = $relative; mode = 'file' } $_) -or
                             ($oldPath -and (Test-Overlap @{ path = $oldPath; mode = 'file' } $_))
-                        } | Select-Object agent, path, mode, expiresAt)
+                        } | Select-Object agent, path, mode, expiresAt, task, message)
                         $record = @{ ok = $true; kind = 'filesystem-event'; changeType = [string]$change.ChangeType; path = $relative; timestamp = $event.TimeGenerated.ToUniversalTime().ToString('o'); activeClaims = $covers }
                         if ($oldPath) { $record.oldPath = $oldPath }
                         Write-Json $record

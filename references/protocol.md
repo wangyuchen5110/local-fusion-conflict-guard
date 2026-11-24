@@ -16,6 +16,14 @@ CLI 安装在 `<项目>/.agents/skills/local-fusion-conflict-guard` 时，在哪
 
 MCP 可选的 `agent` 标签为 1–120 个字符。身份比较忽略大小写，两个并行任务要使用有实质区别的名称。连接重启会生成新身份，旧记录保留到到期或由原持有者释放。任务名用来协调协作者，编辑权限仍由宿主控制。
 
+## 当前分工与共享讨论
+
+多名 agent 可使用同一个 `task` 合作交付一项功能，`agent` 则标识具体参与者。CLI 的 `join.peers` 列出其他参与者当前的有效占用。所有客户端均可通过 `board` 查看 `activeWork`（当前意图和路径）、`tasks`（任务讨论）和 `events`（消息）。工具展示参与者实际申报的工作，宿主通过读取看板获得更新。
+
+- **申请时公开意图。** 指定 `task` 和 `message` 描述要改什么。带任务名的首次申请、新增占用路径或意图变化会自动发布带路径的 `plan` 通知。相同内容续租不会重复通知；省略的元数据会保留原值。冲突响应会展示持有人已声明的目的、任务和路径。
+- **讨论记录。** 事件有 `seq`、`task`、`agent`、`kind`、`message`、`to`、`timestamp`。任务摘要列出任务名、参与者、最后序号和最后消息类型。带 `to` 的消息仍在公开任务讨论中可见；指向 MCP 参与者时用看板上的完整身份。`done` 表示通知进展，不会释放租约或关闭讨论。
+- **翻页与等待。** 可选的 `task` 同时筛选当前占用和任务讨论。`events` 按序号升序返回 `after` 之后的匹配消息。下次用 `nextAfter` 作为 `after`，每个筛选条件单独保存游标。`hasMore` 为真时继续取下一页。没有积压消息时可等待新的匹配消息，超时返回空页。租约释放或到期后，相关消息仍然可读。
+
 ## 路径与冲突判定
 
 `claim` 接受项目根目录下的相对路径或指向项目内部的绝对路径。返回的路径相对于项目根目录，分隔符为 `/`。可预先申请尚未创建的文件。路径比较忽略大小写、末尾的分隔符和同批中的重复项。传具体路径，通配符不会展开。所有客户端应采用相同的目录拼写，尤其在使用符号链接、目录联接或硬链接时。
@@ -37,7 +45,10 @@ MCP 可选的 `agent` 标签为 1–120 个字符。身份比较忽略大小写�
 
 | 工具 | 参数 | 返回值 |
 | --- | --- | --- |
-| `claim` | 必填 `paths`，至少一个非空路径的字符串数组。可选 `mode` 为 `file`（默认）或 `tree`，`ttl_seconds` 为 15–86400 的整数，默认 600，`agent` 见上表 | 成功为 `claim-accepted`，冲突为 `claim-conflict` |
+| `board` | 可选 `task`、非负整数 `after`（默认 0）、`limit`（1–200，默认 50）、`wait_seconds`（0–15，默认 0） | `kind: "board"`、`activeWork`、`tasks`、`events`、`nextAfter`、`hasMore` |
+| `post` | 必填非空 `task`、`message`；可选 `agent`、`to`、`kind`（默认 `progress`，另有 `plan`、`question`、`handoff`、`done`） | `kind: "posted"`，含已登记的 `event` |
+| `edit` | 必填单个 `path`、非空原文 `old_text`、替换文字 `new_text`（空串表示删去该段），可选 `agent` | 成功为 `edited` 并含 `changed`，冲突为 `edit-conflict` 并含 `reason` |
+| `claim` | 必填 `paths`，至少一个非空路径的字符串数组。可选 `mode` 为 `file`（默认）或 `tree`，`ttl_seconds` 为 15–86400 的整数，默认 600，`agent` 见上表 可选 `task`、`message` 公开修改目的。 | 成功为 `claim-accepted`，冲突为 `claim-conflict` |
 | `status` | `{}` | `kind: "status"`，列出当前的 `claims` 与已存在的重叠 `conflicts` |
 | `release` | 可选 `agent` | `kind: "released"`，释放这个身份在当前项目持有的**全部**有效租约 |
 | `watch_changes` | 可选整数 `seconds`，范围 1–15，默认 3 | `project`、`events`、`limit_reached`，每次最多 100 条 |
@@ -51,11 +62,17 @@ MCP 可选的 `agent` 标签为 1–120 个字符。身份比较忽略大小写�
   "project": "D:\\work\\demo",
   "agent": "mcp-demo/ui",
   "requested": [{"agent":"mcp-demo/ui","path":"src/app.ts","mode":"file"}],
-  "conflicts": [{"agent":"api","path":"src","mode":"tree","expiresAt":"2026-11-24T08:10:00+00:00"}]
+  "conflicts": [{"agent":"api","path":"src","mode":"tree","task":"status-api","message":"Implement GET /status","expiresAt":"2026-11-24T08:10:00+00:00"}]
 }
 ```
 
-MCP 将这类竞争作为正常工具结果返回。宿主先判断调用是否失败，再检查业务结果的 `ok` 和 `kind`。只有 `claim-accepted` 且 `ok: true` 才开始这批编辑。无效参数、项目外路径、登记锁超时等会产生工具错误，不能按空冲突列表处理。SDK 客户端可从 `structuredContent` 取对象，或解析返回的 JSON 文本。
+占用冲突和片段编辑冲突都通过普通 MCP 工具响应返回，业务结果为 `ok: false`。宿主先判断调用是否失败，再检查业务结果的 `ok` 和 `kind`。外部编辑器直接写文件前，确认 `claim-accepted` 且 `ok: true`。受保护的片段修改则以 `edited` 且 `ok: true` 为准。无效参数、项目外路径、登记锁超时等会产生工具错误，不能按空冲突列表处理。SDK 客户端可从 `structuredContent` 取对象，或解析返回的 JSON 文本。
+
+## 精确片段编辑
+
+对已有的普通 UTF-8 文件做局部修改时，`edit` 会在共用锁内读取最新内容，查找唯一一处原文并原子替换。大小写和换行符均须匹配。保留原文件的 UTF-8 BOM（若有）及匹配范围以外的内容。不同 agent 可以不申请整文件租约，分别修改同一文件的独立片段。原文与替换内容相同且匹配唯一时返回 `changed: false`。
+
+若路径被他人占用，返回 `reason: "claimed"` 及 `conflicts`。原文消失返回 `stale`；匹配不唯一（包括重叠匹配）返回 `ambiguous`。这三种情况下文件保持原样，重新读取当前内容后再决定如何修改。二进制、非法 UTF-8、链接、缺失文件和 Git/guard 状态路径会产生错误。参与者需要共用同一登记表才能协调写入。
 
 ## PowerShell 命令
 
@@ -63,15 +80,18 @@ MCP 将这类竞争作为正常工具结果返回。宿主先判断调用是否�
 
 | 命令示例 | 参数与行为 |
 | --- | --- |
-| `& $guard join -Project $project` | 返回 `kind: "joined"`、`ok`、`project`、绝对脚本路径 `guard` 和任务身份 `agent`。省略 `-Agent` 生成唯一 ID，也可传任务名。这一步不会占用文件。 |
-| `& $guard claim -Project $project -Agent api -Path 'src/a.ts','src/b.ts'` | `-Path` 至少一个非空路径。可加 `-Mode file` 或 `tree`，`-TtlSeconds` 默认 600，范围 15–86400 |
+| `& $guard join -Project $project` | 返回 `kind: "joined"`、`ok`、`project`、绝对脚本路径 `guard` 和任务身份 `agent`。省略 `-Agent` 生成唯一 ID，也可传任务名。这一步不会占用文件。 `peers` 列出其他 agent 的有效占用和意图。 |
+| `& $guard board -Project $project -Task status-api -After 0 -Limit 50 -WaitSeconds 0` | 读当前工作和消息，省略 `-Task` 读全项目，参数范围同 MCP。 |
+| `& $guard post -Project $project -Agent api -Task status-api -Kind handoff -To tests -Message 'ready is boolean'` | 必填身份、任务和留言，`-Kind`、`-To` 可选。 |
+| `& $guard edit -Project $project -Agent api -Path 'api.ts' -OldText 'timeout: 5' -NewText 'timeout: 10'` | 在一个文件中替换完全匹配的唯一片段。`edit-conflict` 的退出码为 2。 |
+| `& $guard claim -Project $project -Agent api -Path 'src/a.ts','src/b.ts'` | 用 `-Task`、`-Message` 共享意图。`-Path` 至少一个非空路径。可加 `-Mode file` 或 `tree`，`-TtlSeconds` 默认 600，范围 15–86400 |
 | `& $guard status -Project $project` | 清理到期记录后，返回整个项目的占用快照 |
 | `& $guard release -Project $project -Agent api` | 释放 `api` 的全部有效占用。没有匹配记录时也成功，`released` 为 0 |
 | `& $guard cleanup -Project $project` | 仅清理到期记录，返回 `expiredRemoved`。MCP 端调用 `status` 也会清理 |
 | `& $guard watch -Project $project -IntervalSeconds 2` | 前台持续监听，Ctrl+C 停止。`-IntervalSeconds` 是检查已有占用冲突的周期，默认 2，范围 1–60 秒 |
 | `& $guard watch -Project $project -DurationSeconds 5 -MaxEvents 10` | 可选 `-DurationSeconds` 为 1–15 秒，`-MaxEvents` 为 1–1000 条。两者同时指定时先达到的条件结束监听，启动记录不计数 |
 
-每次省略 `-Agent` 的 `claim` 都会生成新身份，申请被拒也一样。成功和冲突响应的顶层都有 `agent`，请在重试、续租和释放时传回这个值。`release` 必须显式传入非空的 `-Agent`。
+每次省略 `-Agent` 的 `claim` 都会生成新身份，申请被拒也一样。成功和冲突响应的顶层都有 `agent`，请在重试、续租和释放时传回这个值。`release` 必须显式传入非空的 `-Agent`。 成功和被拒的申请都会返回 `peers`，列出其他人的当前租约。CLI 的 `post`、`edit` 和 `release` 均须使用明确的身份。
 
 单次命令把一个 JSON 对象输出到标准输出，`watch` 则每行输出一个 JSON 对象。正常完成退出码为 `0`。申请发生冲突时 `claim` 返回 `2`，而 `status` 返回 `2` 表示它发现已经存在的冲突对。脚本执行失败时，独立的 PowerShell 进程通常返回 `1` 并写入错误流。在已有 PowerShell 会话中用 `&` 调用时，还应捕获终止错误；成功与冲突的退出码在调用后立即读取 `$LASTEXITCODE`。
 
@@ -95,11 +115,11 @@ MCP 将这类竞争作为正常工具结果返回。宿主先判断调用是否�
 | `activeClaims` | 每次文件事件处理时查询到的有效覆盖租约，包含 `agent`、`path`、`mode`、`expiresAt`。重命名检查新旧两个路径，实际写入者的身份须由编辑器或宿主提供 |
 | `active-claim-conflict` | 周期检查发现重叠记录时输出，`ok: false`，`conflicts[]` 包含冲突对。这种事件也计入条数上限 |
 
-监听范围包含项目的子目录，过滤项目根的 `.git` 和 Guard 自身的 `.codex/fusion-agent-guard/`。同一次保存可能产生多条文件事件。事件仅在观察窗口内可见，Guard 不保存文件内容、变更历史或可回放的事件队列。
+文件监听覆盖项目子目录，过滤项目根的 `.git` 和 guard 状态路径。一次保存可能产生多条事件。文件监听事件只在观察窗口可见，共享看板则保留可回读的任务讨论。
 
 ## 续租与故障恢复
 
-登记记录位于项目的 `.codex/fusion-agent-guard/claims/`。登记锁只在检查和变更租约时短时持有。占用信息由各个写入工具主动遵守，普通进程仍能直接写入源码。
+路径租约保存在项目的 `.codex/fusion-agent-guard/claims/`，任务消息保存在同级的 `board/`。租约变更、消息发布和受保护的源文件编辑共用同一把登记锁。所有写入参与者都遵守协议时才能在写入前协调，其他进程仍可直接改动文件。
 
 - **长任务**：到期前，以原身份、原路径和原模式再次 `claim`。需要续租哪些路径就传哪些。超过到期时间或连接重启后，重新申请成功，再读取文件当前内容并重做过时的修改。
 - **任务结束或崩溃**：正常完成用 `release`。进程中断后，可等待 `expiresAt`，再调用 `status` 或 `cleanup` 清理。没有后台计时器持续清扫磁盘。单路径提前交接需要先协调该身份其余工作，因为 `release` 作用于全部租约。

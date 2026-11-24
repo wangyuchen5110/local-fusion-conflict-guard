@@ -1,3 +1,3 @@
 interface:
   display_name: "Local Fusion Conflict Guard"
-  short_description: "Prevent local multi-agent edit collisions"
+  short_description: "Share agent plans and prevent overlapping edits"

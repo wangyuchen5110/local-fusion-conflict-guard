@@ -37,10 +37,15 @@ def build_server(project: Path, shell: str) -> FastMCP:
     server = FastMCP(
         "local-fusion-conflict-guard",
         instructions=(
-            "Claim all intended paths before reading for edit. Only edit after "
-            "claim returns ok=true. Renew before expiry and release on completion. "
+            "First read board.activeWork. Use the same task name for a common goal, "
+            "and include task and message (what you are changing and why) in claim. "
+            "Inspect peers on every claim. Read board at work boundaries or wait "
+            "with its cursor, and post questions, progress and handoffs. "
+            "Use edit for an exact change inside a shared UTF-8 file. "
+            "For whole-file writes with other tools, claim the paths, reread, "
+            "renew before expiry and release when finished. "
             "If several agents share this connection, supply a distinct stable "
-            "agent label per task on every claim and release."
+            "agent label per participant on post, edit, claim and release."
         ),
     )
 
@@ -63,6 +68,42 @@ def build_server(project: Path, shell: str) -> FastMCP:
         return [json.loads(line) for line in proc.stdout.decode("utf-8-sig").splitlines() if line.strip()]
 
     @server.tool()
+    async def board(
+        task: str | None = None,
+        after: Annotated[int, Field(ge=0, le=9223372036854775807)] = 0,
+        limit: Annotated[int, Field(ge=1, le=200)] = 50,
+        wait_seconds: Annotated[int, Field(ge=0, le=15)] = 0,
+    ) -> dict[str, Any]:
+        """See who is doing what (activeWork), read task messages, or wait from nextAfter for updates."""
+        params = {"Task": task} if task is not None else {}
+        record, = await invoke("board", After=after, Limit=limit, WaitSeconds=wait_seconds, **params)
+        return record
+
+    @server.tool()
+    async def post(
+        task: str,
+        message: str,
+        kind: Literal["plan", "progress", "question", "handoff", "done"] = "progress",
+        to: str | None = None,
+        agent: AgentName | None = None,
+    ) -> dict[str, Any]:
+        """Post to a shared task. All participants can read and reply, including addressed notes."""
+        params = {"To": to} if to is not None else {}
+        record, = await invoke("post", Agent=owner(agent), Task=task, Message=message, Kind=kind, **params)
+        return record
+
+    @server.tool()
+    async def edit(
+        path: str,
+        old_text: Annotated[str, Field(min_length=1)],
+        new_text: str,
+        agent: AgentName | None = None,
+    ) -> dict[str, Any]:
+        """Co-edit one UTF-8 file: replace a unique literal in its latest content; inspect ok on return."""
+        record, = await invoke("edit", Agent=owner(agent), Path=[path], OldText=old_text, NewText=new_text)
+        return record
+
+    @server.tool()
     async def status() -> dict[str, Any]:
         """List active file and directory claims for this server's project."""
         record, = await invoke("status")
@@ -74,11 +115,18 @@ def build_server(project: Path, shell: str) -> FastMCP:
         mode: Literal["file", "tree"] = "file",
         ttl_seconds: LeaseSeconds = 600,
         agent: AgentName | None = None,
+        task: str | None = None,
+        message: str | None = None,
     ) -> dict[str, Any]:
-        """Claim or renew project paths. On ok=false, stop and inspect conflicts."""
+        """Announce your task and intent while claiming paths. Inspect peers and any blocking conflicts."""
         if any(not path.strip() for path in paths):
             raise ValueError("Each claim path must be nonempty.")
-        record, = await invoke("claim", Agent=owner(agent), Path=paths, Mode=mode, TtlSeconds=ttl_seconds)
+        intent = {}
+        if task is not None:
+            intent["Task"] = task
+        if message is not None:
+            intent["Message"] = message
+        record, = await invoke("claim", Agent=owner(agent), Path=paths, Mode=mode, TtlSeconds=ttl_seconds, **intent)
         return record
 
     @server.tool()

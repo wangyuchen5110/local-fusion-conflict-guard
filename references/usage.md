@@ -11,12 +11,41 @@
 ```powershell
 $task = & 'D:\downloads\local-fusion-conflict-guard\start.ps1' | ConvertFrom-Json
 $guard = $task.guard
-& $guard claim -Agent $task.agent -Path 'src/api.ts'
+$task.peers
+& $guard board -Project $task.project
 ```
 
-核对 `$task.project`。等 `claim` 返回 `ok: true` 后再读取并编辑文件，完成后执行 `& $guard release -Agent $task.agent`。如果下一次调用使用新的 shell，请记住返回的 `guard` 绝对路径和 `agent` ID，继续使用原值。从其他目录启动时，可用 `-Project` 指定项目。
+核对 `$task.project`，用 `$task.peers` 查看其他 agent 的当前占用，用 `board` 读取共享任务和讨论。后续命令若在新的 shell 运行，请继续使用同一个 `guard` 绝对路径和 `agent` ID。从其他目录启动时用 `-Project` 指定项目。
 
 项目副本位于 `.agents/skills/local-fusion-conflict-guard`。下一个任务可再次运行 `start.ps1`，复用内容相同的安装并获取新身份。若内容不同，启动器会保留原安装。要使用原安装，调用其中的 `scripts/fusion-guard.ps1 join`。另一种方式是在目标项目中运行一次 `git clone https://github.com/wangyuchen5110/local-fusion-conflict-guard.git .agents/skills/local-fusion-conflict-guard`，然后调用其中的 `join`。每个任务只需获取一次身份。
+
+### 先看同伴负责什么，再动手
+
+接入后可在同一个终端运行这个演练。A 和 B 共用临时项目和任务名 `status-api`。A 负责接口，B 负责契约测试。B 加入时就能看到 A 的路径和修改目的。
+
+```powershell
+$demo = (New-Item -ItemType Directory -Path (Join-Path $env:TEMP ([guid]::NewGuid().ToString('N')))).FullName
+$a = & $guard join -Project $demo -Agent api | ConvertFrom-Json
+& $guard claim -Project $demo -Agent $a.agent -Task status-api -Message 'Implement GET /status; response field: ready' -Path 'api.ts'
+if ($LASTEXITCODE -ne 0) { throw 'API claim failed' }
+
+$b = & $guard join -Project $demo -Agent tests | ConvertFrom-Json
+$b.peers | Select-Object agent,path,task,message
+& $guard board -Project $demo -Task status-api
+& $guard claim -Project $demo -Agent $b.agent -Task status-api -Message 'Test the ready field' -Path 'api.test.ts'
+if ($LASTEXITCODE -ne 0) { throw 'Test claim failed' }
+& $guard post -Project $demo -Agent tests -Task status-api -Kind question -To api -Message 'Is ready a boolean?'
+& $guard post -Project $demo -Agent api -Task status-api -Kind handoff -To tests -Message 'Yes. Assert that ready is true.'
+& $guard board -Project $demo -Task status-api
+& $guard release -Project $demo -Agent tests
+& $guard release -Project $demo -Agent api
+```
+
+B 的加入回执中，`peers` 会列出 A 对 `api.ts` 的占用及其意图。第一次读看板，`activeWork` 可见当前占用，`events` 可见计划通知。实际开发时，A 可以实现接口，B 同时在自己的占用范围内编写测试。若意外申请了同一路径，先看 `conflicts` 中的持有人、范围和已说明的意图，向对方留言或另选可做的部分；交接后再重新申请争用路径。
+
+MCP 客户端使用同名的 `board`、`claim`、`post` 工具。给 `board` 传入 `{"task":"status-api"}`，下一次把响应的 `nextAfter` 作为 `after` 继续读。带收件人的留言在这个任务的公共看板里可见。每个 agent 需要主动读取看板，尤其在开始依赖另一方的工作或发出交接消息时。
+
+若两人要改**同一份已有 UTF-8 文件的不同片段**，先读取当前内容并约定各自改哪段。每人可直接调用 `edit`，例如 `{"path":"api.ts","old_text":"timeout: 5","new_text":"timeout: 10","agent":"api"}`。这条路径无需先独占文件，工具会在共用锁内重读最新内容。返回 `stale` 或 `ambiguous` 时，重新读取并选取仍符合修改意图的唯一片段；返回 `claimed` 时先与持有人协调。通过其他编辑器直接写文件仍需先申请路径。
 
 ### 可选 MCP 接入
 
@@ -153,7 +182,7 @@ Get-Content -LiteralPath $file
 
 **给 agent 的项目指令。** 把下面这段放入宿主实际会读取的项目说明，或由编排器随任务下发。
 
-> 在准备编辑某个文件时，先向 Fusion Guard 一次申请本次需要写入的路径。申请成功后读取文件当前版本。遇到占用冲突、工具错误或租约到期时暂停这些路径的写入；重新取得占用后再读取并继续。长任务在到期前续租。任务结束时释放该身份持有的全部占用。
+> 选择要做的部分前先看共享看板。约定同一个任务名，在申请路径时写明你的修改目的。直接写文件前先确认申请成功并重读文件。在同一任务中提问、报告进展和交接结果。同一文件中的独立小片段可用 `edit` 并检查结果。遇到冲突先与持有人协商，长任务及时续租，写入结束后释放。
 
 若 agent 没有调用工具的能力，宿主可以在创建、覆盖、改名或删除文件的入口代为执行这一流程。改名同时申请原路径和目标路径；格式化或代码生成要把实际会改动的文件也算在内。任务需要独占整个目录时用 `mode: "tree"`。编辑器和外部程序仍能直接写文件，能否预防覆盖取决于它们的写入入口是否执行了同样的申请流程。
 
