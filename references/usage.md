@@ -2,7 +2,7 @@
 
 **简体中文** · [English](usage.en.md)
 
-第一次使用，先做下面的文件交接演练。它只需要 Windows PowerShell 5.1 或 PowerShell 7，使用临时项目，无须安装 Python。要让实际客户端调用工具，参见[安装与客户端配置](../README.md)。查默认值、返回字段或路径匹配规则，见[协议参考](protocol.md)。
+第一次使用，先做下面的文件交接演练。它只需要 Windows PowerShell 5.1 或 PowerShell 7，使用临时项目，无须安装 Python。要让实际客户端调用工具，参见[安装与客户端配置](../README.zh-CN.md)。查默认值、返回字段或路径匹配规则，见[协议参考](protocol.md)。
 
 ## 在一个终端演练两名 agent 交接文件
 

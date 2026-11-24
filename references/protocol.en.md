@@ -2,7 +2,7 @@
 
 [简体中文](protocol.md) · **English**
 
-Use this reference to decide when an agent can edit a path and how to interpret a response. For installation, see the [README](../README.en.md). For a two-agent walkthrough and troubleshooting, see the [usage guide](usage.en.md).
+Use this reference to decide when an agent can edit a path and how to interpret a response. For installation, see the [README](../README.md). For a two-agent walkthrough and troubleshooting, see the [usage guide](usage.en.md).
 
 ## Project and agent identity
 

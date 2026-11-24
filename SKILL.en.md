@@ -2,7 +2,7 @@
 
 [简体中文](SKILL.md) · **English**
 
-Use this workflow when multiple local agents edit one Windows working tree. The skill entry point is [SKILL.md](SKILL.md). For installation and MCP client configuration, see the [README](README.en.md).
+Use this workflow when multiple local agents edit one Windows working tree. The skill entry point is [SKILL.md](SKILL.md). For installation and MCP client configuration, see the [README](README.md).
 
 Use the project root specified for the task. With MCP, call `status` with `{}` and check its `project` field. With PowerShell, pass `-Project` explicitly. All participants need access to the same working directory on disk.
 

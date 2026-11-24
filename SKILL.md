@@ -7,7 +7,7 @@ description: 在多个本地 agent 共用同一 Windows 工作目录时，通过
 
 **简体中文** · [English instructions](SKILL.en.md)
 
-以用户指定的工作目录为项目根。接入 MCP 后先调用 `status({})` 核对 `project`；使用 CLI 时每次显式传 `-Project`。把所有 agent 指向磁盘上的同一份目录。首次接入见 [README](README.md)。
+以用户指定的工作目录为项目根。接入 MCP 后先调用 `status({})` 核对 `project`；使用 CLI 时每次显式传 `-Project`。把所有 agent 指向磁盘上的同一份目录。首次接入见 [README](README.zh-CN.md)。
 
 ## 修改与交接
 

@@ -2,7 +2,7 @@
 
 [简体中文](usage.md) · **English**
 
-Try the file handoff below first. It uses a temporary project and runs in Windows PowerShell 5.1 or PowerShell 7. Python is optional for this exercise. To connect a client, see [installation and configuration](../README.en.md). For parameter defaults, response fields and path matching, see the [protocol reference](protocol.en.md).
+Try the file handoff below first. It uses a temporary project and runs in Windows PowerShell 5.1 or PowerShell 7. Python is optional for this exercise. To connect a client, see [installation and configuration](../README.md). For parameter defaults, response fields and path matching, see the [protocol reference](protocol.en.md).
 
 ## Hand a file from one agent to another in a single terminal
 
