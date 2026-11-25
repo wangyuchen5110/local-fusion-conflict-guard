@@ -12,4 +12,6 @@ When agents use the same Fusion window, one operates it through a complete step 
 
 From the project root, the agent runs the downloaded `start.ps1`. Agents working toward one goal use the same task name and share progress, questions and handoffs on its board. Requires Windows PowerShell 5.1 or 7. [Optional MCP setup](references/usage.en.md#setup)
 
+If the project already has an older copy, upgrade it before using the Fusion window together. [Upgrade an existing installation](references/usage.en.md#update-disconnect-or-uninstall)
+
 [Agent instructions](SKILL.en.md) · [User guide](references/usage.en.md) · [Command reference](references/protocol.en.md)

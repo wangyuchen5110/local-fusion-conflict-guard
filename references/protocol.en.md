@@ -34,6 +34,8 @@ The same `task` groups one feature's contributions from multiple agents. The `ag
 
 These calls share one lease per local Windows account across project roots. The owner is the project and agent together. Acquire accepts optional `-Task`, `-Message` and `-TtlSeconds` (MCP `task`, `message`, `ttl_seconds`). The default is 600 seconds, range 15–86400. An active `holder` includes `project`, `agent`, `task`, `message`, `acquiredAt` and `expiresAt`. Use the same identity and interface for acquisition, renewal and release. A busy result has `ok: false` and CLI exit code 2. Expiry makes the lease available on the next call. Project file claims are independent.
 
+If your worktree is moved or deleted while you hold the UI, run `fusion-ui-release -Project <original-absolute-path> -Agent <your-id>` from an available copy of the CLI. Reuse the project path and identity from your successful acquisition. The next participant can then acquire the UI immediately.
+
 ## Paths and conflicts
 
 `claim` accepts paths relative to the project root and absolute paths within it. Results use project-relative paths with `/` separators. A task can claim a file before creating it. Comparisons ignore case and trailing separators. A batch coalesces duplicate paths. Use literal paths, since the guard does not expand wildcard patterns. Agree on one spelling for each path across clients, particularly when the workspace contains symbolic links, junctions or hard links.

@@ -17,7 +17,9 @@ $task.peers
 
 核对 `$task.project`，用 `$task.peers` 查看其他 agent 的当前占用，用 `board` 读取共享任务和讨论。后续命令若在新的 shell 运行，请继续使用同一个 `guard` 绝对路径和 `agent` ID。从其他目录启动时用 `-Project` 指定项目。
 
-项目副本位于 `.agents/skills/local-fusion-conflict-guard`。下一个任务可再次运行 `start.ps1`，复用内容相同的安装并获取新身份。若内容不同，启动器会保留原安装。要使用原安装，调用其中的 `scripts/fusion-guard.ps1 join`。另一种方式是在目标项目中运行一次 `git clone https://github.com/wangyuchen5110/local-fusion-conflict-guard.git .agents/skills/local-fusion-conflict-guard`，然后调用其中的 `join`。每个任务只需获取一次身份。
+项目副本位于 `.agents/skills/local-fusion-conflict-guard`。另一个会话可再次运行 `start.ps1`，复用内容相同的安装并获取自己的身份。如果启动器提示文件有差异，先暂停参与协作的 agent，把旧的 skill 目录移到 `.agents/skills` 以外的位置备份，再对同一项目运行下载包里的启动器。让各会话重新读取 skill 或重连 MCP。[升级步骤](#更新停用和卸载)
+
+如果安装副本经过定制，把需要保留的改动合并到新版中。首次用 Git 安装也可以在项目根目录执行 `git clone https://github.com/wangyuchen5110/local-fusion-conflict-guard.git .agents/skills/local-fusion-conflict-guard`，再由每个会话各调用一次克隆目录里的 `scripts/fusion-guard.ps1 join`。
 
 ### 操作 Fusion 窗口
 

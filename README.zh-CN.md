@@ -12,4 +12,6 @@
 
 agent 从项目根目录调用下载包里的 `start.ps1`。协作同一目标时使用同一个任务名，在共享看板里提问、更新进展和交接。只需 Windows PowerShell 5.1 或 7。[可选的 MCP 配置](references/usage.md#接入)
 
+项目已经装过旧版时，先升级，再让多个会话共同操作 Fusion 窗口。[升级已有安装](references/usage.md#更新停用和卸载)
+
 [给 agent 的操作指令](SKILL.md) · [使用手册](references/usage.md) · [命令参考](references/protocol.md)

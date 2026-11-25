@@ -20,10 +20,11 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 
 
 @asynccontextmanager
-async def open_session(project):
+async def open_session(project, *, scripts=SCRIPTS, env=None):
     params = StdioServerParameters(
         command=sys.executable,
-        args=[str(SCRIPTS / "mcp_server.py"), "--project", str(project)],
+        args=[str(scripts / "mcp_server.py"), "--project", str(project)],
+        env=env,
     )
     async with stdio_client(params) as (reader, writer):
         async with ClientSession(reader, writer, read_timeout_seconds=timedelta(seconds=45)) as session:
@@ -120,6 +121,20 @@ class SharedGuardTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(claimed["claims"][0]["agent"], holders)
                 quiet = await self.tool(session, "watch_changes", seconds=1)
                 self.assertEqual(quiet["events"], [])
+
+    async def test_literal_timestamps_survive_mcp_edits(self):
+        first = "2026-11-25T12:10:11.1234567+00:00"
+        second = "2026-11-25T12:10:11.7654321-03:30"
+        multiline = first + "\r\n" + second
+        with tempfile.TemporaryDirectory(prefix="fusion literal edits ") as project:
+            path = Path(project) / "timestamps.txt"
+            path.write_bytes(first.encode("ascii"))
+            async with open_session(project) as session:
+                for old, new in ((first, second), (second, multiline), (multiline, "")):
+                    result = await self.tool(session, "edit", path=path.name,
+                                             old_text=old, new_text=new)
+                    self.assertTrue(result["ok"], result)
+                    self.assertEqual(path.read_bytes(), new.encode("ascii"))
 
 
 if __name__ == "__main__":

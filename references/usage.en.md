@@ -17,7 +17,9 @@ $task.peers
 
 Check `$task.project` and inspect `$task.peers` for live claims by other agents. `board` adds the shared task conversation. If a later command runs in a fresh shell, reuse the same literal `guard` path and `agent` ID. Use `-Project` to select the project when launching from another directory.
 
-The project copy lives under `.agents/skills/local-fusion-conflict-guard`. Another task can rerun `start.ps1` to reuse a matching installation and get its own identity. A mismatch leaves the existing files in place. To use the existing installation, call its `scripts/fusion-guard.ps1 join`. Alternatively, from the target project, run `git clone https://github.com/wangyuchen5110/local-fusion-conflict-guard.git .agents/skills/local-fusion-conflict-guard` once and call `join` in that clone. Obtain one identity per task.
+The project copy lives under `.agents/skills/local-fusion-conflict-guard`. Another session can rerun `start.ps1` to reuse a matching installation and get its own identity. If the launcher reports a mismatch, pause the participating agents, move the old skill directory to a backup outside `.agents/skills` and run the downloaded launcher again for the same project. Reload the skill or reconnect MCP in each session. [Upgrade instructions](#update-disconnect-or-uninstall)
+
+If you use a customized copy, carry your customizations into the updated version. For a fresh Git installation, run `git clone https://github.com/wangyuchen5110/local-fusion-conflict-guard.git .agents/skills/local-fusion-conflict-guard` from the project root and call the clone's `scripts/fusion-guard.ps1 join` once per session.
 
 ### Working in the Fusion window
 

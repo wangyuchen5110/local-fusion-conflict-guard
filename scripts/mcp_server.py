@@ -19,10 +19,21 @@ GUARD = Path(__file__).resolve().with_name("fusion-guard.ps1")
 BRIDGE = r"""
 $ErrorActionPreference = 'Stop'
 [Console]::InputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-$message = [Console]::In.ReadToEnd() | ConvertFrom-Json
+$raw = [Console]::In.ReadToEnd()
+if ($PSVersionTable.PSEdition -eq 'Core') {
+    # PowerShell 7's default JSON parser converts ISO text to DateTime, even inside arrays.
+    # Its bundled Json.NET can preserve strings on versions predating -DateKind.
+    $settings = [Newtonsoft.Json.JsonSerializerSettings]::new()
+    $settings.DateParseHandling = 'None'
+    $message = [Newtonsoft.Json.JsonConvert]::DeserializeObject($raw, [System.Dynamic.ExpandoObject], $settings)
+    $keys = $message.params.psbase.Keys
+} else {
+    $message = $raw | ConvertFrom-Json
+    $keys = $message.params.PSObject.Properties.Name
+}
 $arguments = @{}
-foreach ($property in $message.params.PSObject.Properties) {
-    $arguments[$property.Name] = $property.Value
+foreach ($key in $keys) {
+    $arguments[$key] = $message.params.$key
 }
 & $message.script @arguments
 exit $LASTEXITCODE

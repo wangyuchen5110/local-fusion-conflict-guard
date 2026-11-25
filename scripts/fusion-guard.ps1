@@ -41,12 +41,18 @@ function Write-Json([object]$Value) {
     $Value | ConvertTo-Json -Depth 8 -Compress
 }
 
-function Get-ProjectRoot([string]$InputPath) {
-    $resolved = Resolve-Path -LiteralPath $InputPath -ErrorAction Stop
-    if (-not (Test-Path -LiteralPath $resolved.Path -PathType Container)) {
-        throw "Project must be an existing directory: $InputPath"
+function Get-ProjectRoot([string]$InputPath, [switch]$AllowMissing) {
+    # The UI holder can identify a removed worktree by its recorded absolute path.
+    $missingAbsolutePath = $AllowMissing -and $InputPath -match '^(?:[a-z]:[\\/]|[\\/]{2})' -and
+        -not [IO.Directory]::Exists($InputPath)
+    if (-not $missingAbsolutePath) {
+        $resolved = Resolve-Path -LiteralPath $InputPath -ErrorAction Stop
+        if (-not (Test-Path -LiteralPath $resolved.Path -PathType Container)) {
+            throw "Project must be an existing directory: $InputPath"
+        }
+        $InputPath = $resolved.ProviderPath
     }
-    $fullPath = [IO.Path]::GetFullPath($resolved.ProviderPath)
+    $fullPath = [IO.Path]::GetFullPath($InputPath)
     $volumeRoot = [IO.Path]::GetPathRoot($fullPath)
     if ($fullPath.TrimEnd('\') -eq $volumeRoot.TrimEnd('\')) { return $volumeRoot }
     return $fullPath.TrimEnd('\')
@@ -63,7 +69,7 @@ if (-not $PSBoundParameters.ContainsKey('Project')) {
         }
     }
 }
-$projectRoot = Get-ProjectRoot $Project
+$projectRoot = Get-ProjectRoot $Project -AllowMissing:($Command -in 'fusion-ui-status','fusion-ui-release')
 if ($Command -in 'join', 'claim') {
     if (-not $PSBoundParameters.ContainsKey('Agent')) {
         $Agent = [Guid]::NewGuid().ToString('N')
@@ -71,11 +77,6 @@ if ($Command -in 'join', 'claim') {
         throw '-Agent must be nonempty when supplied.'
     }
 }
-$stateRoot = Join-Path $projectRoot '.codex\fusion-agent-guard'
-$claimsRoot = Join-Path $stateRoot 'claims'
-$lockPath = Join-Path $stateRoot '.registry.lock'
-$isFusionUi = $Command -like 'fusion-ui-*'
-if ($Command -ne 'join' -and -not $isFusionUi) { [IO.Directory]::CreateDirectory($claimsRoot) | Out-Null }
 
 function Get-RelativeProjectPath([string]$InputPath) {
     if ([string]::IsNullOrWhiteSpace($InputPath)) { throw 'Claim paths must be nonempty.' }
@@ -213,13 +214,18 @@ function Test-IgnoredPath([string]$RelativePath) {
            $RelativePath -eq '.codex' -or $RelativePath -eq '.codex/fusion-agent-guard' -or $RelativePath.StartsWith('.codex/fusion-agent-guard/', [StringComparison]::OrdinalIgnoreCase)
 }
 
-if ($isFusionUi) {
+if ($Command -like 'fusion-ui-*') {
     . (Join-Path $PSScriptRoot 'fusion-ui.ps1')
     $result = Invoke-FusionUiLease -Action $Command -Project $projectRoot -Agent $Agent -Task $Task -Message $Message -TtlSeconds $TtlSeconds
     Write-Json $result
     if (-not $result.ok) { exit 2 }
     exit 0
 }
+
+$stateRoot = Join-Path $projectRoot '.codex\fusion-agent-guard'
+$claimsRoot = Join-Path $stateRoot 'claims'
+$lockPath = Join-Path $stateRoot '.registry.lock'
+if ($Command -ne 'join') { [IO.Directory]::CreateDirectory($claimsRoot) | Out-Null }
 
 switch ($Command) {
     'join' {

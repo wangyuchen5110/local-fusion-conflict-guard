@@ -43,7 +43,7 @@ function Assert-MatchingInstall {
                 [IO.File]::ReadAllText($source).Replace("`r`n", "`n"),
                 [IO.File]::ReadAllText($copy).Replace("`r`n", "`n"),
                 [StringComparison]::Ordinal)) {
-            throw "The installed '$name' differs or is missing at '$destination'. Review the existing installation before updating it."
+            throw "The installed '$name' differs or is missing at '$destination'. To upgrade, pause participating agents, move the existing skill directory to a backup outside .agents/skills, then rerun this downloaded start.ps1 for the same project. See references/usage.en.md or references/usage.md in the download."
         }
     }
 }

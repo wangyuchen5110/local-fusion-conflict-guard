@@ -1,4 +1,11 @@
 # A Fusion window can be shared by agents working from different project roots.
+function Get-FusionUiLeaseDirectory {
+    # GUI hosts may redirect LOCALAPPDATA for their workers while sharing the same Fusion window.
+    $userDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+    if ([string]::IsNullOrWhiteSpace($userDirectory)) { throw 'Cannot locate the local application data directory.' }
+    return [IO.Path]::Combine($userDirectory, 'local-fusion-conflict-guard', 'fusion-ui')
+}
+
 function Invoke-FusionUiLease {
     param(
         [string]$Action, [string]$Project, [string]$Agent, [string]$Task,
@@ -7,12 +14,7 @@ function Invoke-FusionUiLease {
     if ($Action -ne 'fusion-ui-status' -and [string]::IsNullOrWhiteSpace($Agent)) {
         throw "$Action requires -Agent."
     }
-    $userState = $env:LOCALAPPDATA
-    if ([string]::IsNullOrWhiteSpace($userState)) {
-        $userState = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
-    }
-    if ([string]::IsNullOrWhiteSpace($userState)) { throw 'Cannot locate the local application data directory.' }
-    $directory = [IO.Path]::Combine($userState, 'local-fusion-conflict-guard', 'fusion-ui')
+    $directory = Get-FusionUiLeaseDirectory
     [IO.Directory]::CreateDirectory($directory) | Out-Null
     $leasePath = [IO.Path]::Combine($directory, 'lease.json')
     $registryLock = [IO.Path]::Combine($directory, '.registry.lock')
