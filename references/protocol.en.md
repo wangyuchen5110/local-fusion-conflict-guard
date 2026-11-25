@@ -24,6 +24,16 @@ The same `task` groups one feature's contributions from multiple agents. The `ag
 - **History.** A posted event records `seq`, `task`, `agent`, `kind`, `message`, `to` and `timestamp`. Each summary in `tasks` names the task, participants, last sequence and last kind. A `to` value addresses a note on the public board. Use the full visible identity for an MCP recipient. A `done` note leaves leases and the conversation open until participants take further action.
 - **Cursors.** The optional `task` filters current claims and conversations. `events` contains matching messages with sequence numbers higher than `after`, oldest first. Pass the returned `nextAfter` as the next `after`; keep one cursor per filter. If `hasMore` is true, fetch the next page straight away. With no backlog, optionally wait for a matching message. Timeout returns an empty page. Messages remain readable after related claims expire or are released.
 
+## Fusion UI lease
+
+| CLI | MCP | Result |
+| --- | --- | --- |
+| `fusion-ui-acquire -Agent ID` | `fusion_ui_acquire` | `fusion-ui-acquired` if free or renewed by the same owner, otherwise `fusion-ui-busy` |
+| `fusion-ui-status` | `fusion_ui_status` | `fusion-ui-status` with the current `holder`, or null when available |
+| `fusion-ui-release -Agent ID` | `fusion_ui_release` | `fusion-ui-released` when released or already free, otherwise `fusion-ui-busy` |
+
+These calls share one lease per local Windows account across project roots. The owner is the project and agent together. Acquire accepts optional `-Task`, `-Message` and `-TtlSeconds` (MCP `task`, `message`, `ttl_seconds`). The default is 600 seconds, range 15–86400. An active `holder` includes `project`, `agent`, `task`, `message`, `acquiredAt` and `expiresAt`. Use the same identity and interface for acquisition, renewal and release. A busy result has `ok: false` and CLI exit code 2. Expiry makes the lease available on the next call. Project file claims are independent.
+
 ## Paths and conflicts
 
 `claim` accepts paths relative to the project root and absolute paths within it. Results use project-relative paths with `/` separators. A task can claim a file before creating it. Comparisons ignore case and trailing separators. A batch coalesces duplicate paths. Use literal paths, since the guard does not expand wildcard patterns. Agree on one spelling for each path across clients, particularly when the workspace contains symbolic links, junctions or hard links.
@@ -50,7 +60,7 @@ The default `file` mode covers the exact path. To include the children of a dire
 | `edit` | One `path`, a nonempty literal `old_text`, literal `new_text` (empty deletes the passage); optional `agent` | `edited` with `changed`, or `edit-conflict` with `reason` |
 | `claim` | Required `paths` is a string array containing at least one path. Each path must be nonblank. Optional `mode` accepts `file` (default) or `tree`. Optional integer `ttl_seconds` accepts 15–86400 and defaults to 600. Optional `agent` identifies a task on a shared connection. Optional `task` and `message` share the intention. | `claim-accepted` on success or `claim-conflict` on contention |
 | `status` | `{}` | `kind: "status"`, active `claims` and any overlapping records in `conflicts` |
-| `release` | Optional `agent` | `kind: "released"`. Releases **all** active claims for this owner in this project |
+| `release` | Optional `agent` | `kind: "released"`. Releases **all file and directory claims** for this owner in this project |
 | `watch_changes` | Optional integer `seconds` accepts 1–15 and defaults to 3 | `project`, `events` and `limit_reached`, with up to 100 events per call |
 
 Suppose the CLI task `api` holds a tree claim on `src`. When the MCP task `ui` calls `claim` with `{"paths":["src/app.ts"],"agent":"ui"}`, it receives a result like the following. The project path, identity and expiration time are illustrative.

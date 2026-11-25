@@ -1,6 +1,6 @@
 ---
 name: local-fusion-conflict-guard
-description: 让同一 Windows 项目的多个本地 agent 共享工作意图、分工和进度，在写入前发现冲突。Coordinate agents in one working tree through shared plans, messages, safe edits and file claims.
+description: 让 Windows 上的多个 agent 共享分工，协调文件编辑与 Fusion 窗口操作。Coordinate file edits and take turns using the Fusion UI across agent sessions.
 ---
 
 # Local Fusion Conflict Guard
@@ -10,6 +10,12 @@ description: 让同一 Windows 项目的多个本地 agent 共享工作意图、
 ## 加入同一项目
 
 用户给出仓库链接时，从下载包运行 `start.ps1 -Project <目标项目>`。已有当前版本的项目副本时，直接调用其中的 `scripts/fusion-guard.ps1 join`。保存返回的 `guard`、`project` 和自己的 `agent`，跨 shell 复用。先读 `peers`，确认大家在编辑同一份工作目录。使用 MCP 的 agent 从 `board({})` 开始；同一连接中的并行参与者各选一个稳定的 `agent` 标签。
+
+## 操作 Fusion 窗口
+
+每个会话沿用自己的身份。打开设计、切换标签、激活窗口或发送界面输入前，调用 `fusion-ui-acquire -Agent $me.agent`（MCP 为 `fusion_ui_acquire`）。仅在返回 `ok: true` 且租约仍有效时操作。先核对当前文档，已打开目标就直接使用。将同一文档的连续步骤做完，等触发的界面操作完成，再用同一身份 `fusion-ui-release` 交接。耗时步骤开始前先续租，预留足够的有效时间。
+
+若前台已被占用，继续做后台工作，等交接或到期再申请。看板消息和文件变化只用于了解进展。若用户中途切走，暂停界面操作并释放前台，保留用户当前选择。
 
 ## 先让别人知道你在做什么
 

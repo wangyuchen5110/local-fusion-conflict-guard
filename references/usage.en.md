@@ -19,6 +19,26 @@ Check `$task.project` and inspect `$task.peers` for live claims by other agents.
 
 The project copy lives under `.agents/skills/local-fusion-conflict-guard`. Another task can rerun `start.ps1` to reuse a matching installation and get its own identity. A mismatch leaves the existing files in place. To use the existing installation, call its `scripts/fusion-guard.ps1 join`. Alternatively, from the target project, run `git clone https://github.com/wangyuchen5110/local-fusion-conflict-guard.git .agents/skills/local-fusion-conflict-guard` once and call `join` in that clone. Obtain one identity per task.
 
+### Working in the Fusion window
+
+Suppose A is checking the assembly while B prepares a drawing. B can edit its own files, run tests and read the board while A uses Fusion. Even if the drawing belongs to another project, B waits until it can acquire the UI before opening it in Fusion. A file claim alone gives no turn at the UI.
+
+```powershell
+$identity = @{ Project = $task.project; Agent = $task.agent }
+$turn = & $guard fusion-ui-acquire @identity -Task assembly -Message 'Check joint limits' | ConvertFrom-Json
+if ($turn.ok) {
+    try {
+        # Check the active document, then perform and finish the related Fusion steps here.
+    } finally {
+        & $guard fusion-ui-release @identity
+    }
+} else {
+    $turn.holder | Select-Object project,agent,task,message,expiresAt
+}
+```
+
+The same workflow uses `fusion_ui_acquire` and `fusion_ui_release` over MCP. Reuse the same agent label for both. Each agent or host that sends UI commands must honor the result, including for commands that implicitly open a document. During a handoff, leave the current tab in place. The next holder selects its target when its work needs it.
+
 ### Share the plan before touching a file
 
 Run this exercise in one terminal after setup. A and B share a temporary project and the task name `status-api`. A takes the endpoint while B starts its contract test. The public claim tells B what A is doing before either agent touches a file.
@@ -183,6 +203,8 @@ The server returns a claim conflict as an ordinary MCP tool result. Check the re
 **Project instructions for agents.** Put the following in a project instructions file your host reads, or include it in each task sent by your orchestrator.
 
 > Read the board before choosing work. Identify the shared task and include your intention and paths in your claim. Check the result before any direct write, then reread the files. Ask questions, report progress and hand off results in the same task. For small distinct passages of one file, use the guarded `edit` tool and inspect its result. Reconcile conflicts with the holder before retrying. Renew leases before they expire and release them after all writes finish.
+>
+> Before sending anything to the Fusion UI, call `fusion_ui_acquire`. On a tool error or a busy result, keep the current window and tab in place. Work in the background until handoff. Release the UI after your last related action finishes.
 
 If an agent cannot call tools, its host can follow the same procedure when creating, overwriting, renaming or deleting files. Claim both the old and new paths for a rename. Include files that formatters or generators will change. Use `mode: "tree"` when a task needs exclusive access to a directory and its descendants. Editors and other processes can write directly to disk. To protect their writes, integrate the claim check into those entry points too.
 
@@ -236,6 +258,7 @@ For a bounded CLI run, use `& $guard watch -Project $demo -DurationSeconds 10 -M
 
 | Symptom | What to check |
 | --- | --- |
+| Fusion still switches tabs during another agent's turn | Read `fusion-ui-status` from both sessions. They should show the same holder. Check that each session has loaded the updated skill or reconnected to the updated MCP server, uses its own identity and checks `ok` before every batch of UI actions. A host that sends UI input directly must do this at its command entry point. |
 | Clients cannot see each other's claims | Call `status` on each side, compare `project` and confirm both tasks use the same local working tree. Pass `-Project` to override the CLI default if needed. Give each task on a shared MCP connection a distinct label. |
 | `claim` returns a conflict | Inspect `agent`, `path`, `mode` and `expiresAt` in each `conflicts` entry. A `tree` claim on a parent directory also covers the file. Wait for the handoff or request an unrelated path separately. |
 | No MCP tools appear or the `mcp` module is missing | Check the absolute paths of the Python interpreter, `mcp_server.py` and the project in the client config. Run `-m pip show mcp` with that exact interpreter. Follow [Setup](#setup) to install into that environment if needed, then reconnect. |

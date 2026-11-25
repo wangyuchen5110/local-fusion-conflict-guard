@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from uuid import uuid4
@@ -44,8 +45,14 @@ def build_server(project: Path, shell: str) -> FastMCP:
             "Use edit for an exact change inside a shared UTF-8 file. "
             "For whole-file writes with other tools, claim the paths, reread, "
             "renew before expiry and release when finished. "
+            "Before any operation on the Fusion UI, acquire its foreground lease "
+            "with fusion_ui_acquire and check ok. The lease is shared across projects "
+            "for this Windows user on this machine. Keep related UI steps together, "
+            "renew before expiry, and release with fusion_ui_release after the batch. "
+            "If busy or the lease expires, leave Fusion untouched (including activation) "
+            "until you acquire it again. Continue offline work while waiting. "
             "If several agents share this connection, supply a distinct stable "
-            "agent label per participant on post, edit, claim and release."
+            "agent label per participant on post, edit, claim, release and Fusion UI leases."
         ),
     )
 
@@ -62,6 +69,7 @@ def build_server(project: Path, shell: str) -> FastMCP:
                 [shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", BRIDGE],
                 input=json.dumps(request).encode("ascii"),
                 check=False,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
         if proc.returncode not in (0, 2):
             raise ValueError(proc.stderr.decode("utf-8", "replace").strip() or "Guard failed")
@@ -133,6 +141,34 @@ def build_server(project: Path, shell: str) -> FastMCP:
     async def release(agent: AgentName | None = None) -> dict[str, Any]:
         """Release all paths claimed by this connection with the same agent label."""
         record, = await invoke("release", Agent=owner(agent))
+        return record
+
+    @server.tool()
+    async def fusion_ui_status() -> dict[str, Any]:
+        """Read the Fusion foreground lease shared across projects for this Windows user and machine."""
+        record, = await invoke("fusion-ui-status")
+        return record
+
+    @server.tool()
+    async def fusion_ui_acquire(
+        agent: AgentName | None = None,
+        task: str | None = None,
+        message: str | None = None,
+        ttl_seconds: LeaseSeconds = 600,
+    ) -> dict[str, Any]:
+        """Acquire or renew before any Fusion UI action. Check ok before activating Fusion or changing documents."""
+        intent = {}
+        if task is not None:
+            intent["Task"] = task
+        if message is not None:
+            intent["Message"] = message
+        record, = await invoke("fusion-ui-acquire", Agent=owner(agent), TtlSeconds=ttl_seconds, **intent)
+        return record
+
+    @server.tool()
+    async def fusion_ui_release(agent: AgentName | None = None) -> dict[str, Any]:
+        """Release this participant's foreground lease after finishing the related Fusion UI steps."""
+        record, = await invoke("fusion-ui-release", Agent=owner(agent))
         return record
 
     @server.tool()

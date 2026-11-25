@@ -19,6 +19,26 @@ $task.peers
 
 项目副本位于 `.agents/skills/local-fusion-conflict-guard`。下一个任务可再次运行 `start.ps1`，复用内容相同的安装并获取新身份。若内容不同，启动器会保留原安装。要使用原安装，调用其中的 `scripts/fusion-guard.ps1 join`。另一种方式是在目标项目中运行一次 `git clone https://github.com/wangyuchen5110/local-fusion-conflict-guard.git .agents/skills/local-fusion-conflict-guard`，然后调用其中的 `join`。每个任务只需获取一次身份。
 
+### 操作 Fusion 窗口
+
+假设 A 正在 Fusion 里检查装配，B 在准备图纸。此时 B 仍可修改自己负责的文件、跑测试、读看板。即使图纸属于另一个项目，B 也要等到取得前台后再打开图纸。取得文件占用并不会同时取得前台。
+
+```powershell
+$identity = @{ Project = $task.project; Agent = $task.agent }
+$turn = & $guard fusion-ui-acquire @identity -Task assembly -Message '检查关节行程' | ConvertFrom-Json
+if ($turn.ok) {
+    try {
+        # 核对当前文档，在这里完成本次连续的 Fusion 操作。
+    } finally {
+        & $guard fusion-ui-release @identity
+    }
+} else {
+    $turn.holder | Select-Object project,agent,task,message,expiresAt
+}
+```
+
+MCP 对应的工具为 `fusion_ui_acquire` 和 `fusion_ui_release`，两次使用相同的 agent 标签。每个能向 Fusion 发送命令的 agent 或宿主都需要检查申请结果，包括那些会自动打开文档的命令。交接时保留当前标签，下一位按实际需要选择文档。
+
 ### 先看同伴负责什么，再动手
 
 接入后可在同一个终端运行这个演练。A 和 B 共用临时项目和任务名 `status-api`。A 负责接口，B 负责契约测试。B 加入时就能看到 A 的路径和修改目的。
@@ -183,6 +203,8 @@ Get-Content -LiteralPath $file
 **给 agent 的项目指令。** 把下面这段放入宿主实际会读取的项目说明，或由编排器随任务下发。
 
 > 选择要做的部分前先看共享看板。约定同一个任务名，在申请路径时写明你的修改目的。直接写文件前先确认申请成功并重读文件。在同一任务中提问、报告进展和交接结果。同一文件中的独立小片段可用 `edit` 并检查结果。遇到冲突先与持有人协商，长任务及时续租，写入结束后释放。
+>
+> 在向 Fusion 界面发送任何操作前调用 `fusion_ui_acquire`。工具报错或前台已被占用时，保留当前窗口和标签，继续做后台工作。取得前台后，等连续的界面操作完成再释放。
 
 若 agent 没有调用工具的能力，宿主可以在创建、覆盖、改名或删除文件的入口代为执行这一流程。改名同时申请原路径和目标路径；格式化或代码生成要把实际会改动的文件也算在内。任务需要独占整个目录时用 `mode: "tree"`。编辑器和外部程序仍能直接写文件，能否预防覆盖取决于它们的写入入口是否执行了同样的申请流程。
 
@@ -236,6 +258,7 @@ Add-Content -LiteralPath (Join-Path $demo 'notes.txt') -Value 'watch demo' -Enco
 
 | 现象 | 检查方法与处理 |
 | --- | --- |
+| 一个 agent 操作期间 Fusion 仍跳到另一标签 | 两个会话分别调用 `fusion-ui-status`，应看到同一持有人。确认每个会话已读入新版 skill 或重连新版 MCP，使用各自的身份，并在每组界面操作前检查申请结果的 `ok`。直接发送界面输入的宿主也要在发送命令的入口做这项检查。 |
 | 两个客户端看不到对方的占用 | 两边都调用 `status`，逐项核对 `project`，并确认任务在同一份本地工作树中。如需纠正目标，CLI 可传 `-Project`。同一 MCP 连接里的任务要分别命名。 |
 | `claim` 返回冲突 | 核对 `conflicts[].agent`、`path`、`mode`、`expiresAt`。上层目录的 `tree` 占用也会覆盖当前文件。等待交接或先单独申请无关路径。 |
 | MCP 未列出工具，或提示缺少 `mcp` 模块 | 核对客户端配置里的 Python、`mcp_server.py` 和项目三个绝对路径。用配置里的那个 Python 执行 `-m pip show mcp`；需要安装时按[接入](#接入)说明在同一环境执行安装命令，之后重新连接。 |

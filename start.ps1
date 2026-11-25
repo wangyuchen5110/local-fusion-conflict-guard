@@ -28,7 +28,7 @@ $destination = Join-Path $skillsDir $skillName
 $runtime = @(
     'start.ps1', 'SKILL.md', 'SKILL.en.md', 'agents/openai.yaml',
     'README.md', 'README.zh-CN.md', 'README.en.md', 'requirements-mcp.txt',
-    'scripts/fusion-guard.ps1', 'scripts/mcp_server.py', 'scripts/team-board.ps1', 'scripts/shared-edit.ps1',
+    'scripts/fusion-guard.ps1', 'scripts/fusion-ui.ps1', 'scripts/mcp_server.py', 'scripts/team-board.ps1', 'scripts/shared-edit.ps1',
     'references/usage.md', 'references/usage.en.md',
     'references/protocol.md', 'references/protocol.en.md'
 )

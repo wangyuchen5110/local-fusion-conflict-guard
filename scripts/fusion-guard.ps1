@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet('join', 'board', 'post', 'edit', 'claim', 'release', 'status', 'cleanup', 'watch')]
+    [ValidateSet('join', 'board', 'post', 'edit', 'claim', 'release', 'status', 'cleanup', 'watch',
+                 'fusion-ui-status', 'fusion-ui-acquire', 'fusion-ui-release')]
     [string]$Command,
 
     [string]$Project = (Get-Location).Path,
@@ -73,7 +74,8 @@ if ($Command -in 'join', 'claim') {
 $stateRoot = Join-Path $projectRoot '.codex\fusion-agent-guard'
 $claimsRoot = Join-Path $stateRoot 'claims'
 $lockPath = Join-Path $stateRoot '.registry.lock'
-if ($Command -ne 'join') { [IO.Directory]::CreateDirectory($claimsRoot) | Out-Null }
+$isFusionUi = $Command -like 'fusion-ui-*'
+if ($Command -ne 'join' -and -not $isFusionUi) { [IO.Directory]::CreateDirectory($claimsRoot) | Out-Null }
 
 function Get-RelativeProjectPath([string]$InputPath) {
     if ([string]::IsNullOrWhiteSpace($InputPath)) { throw 'Claim paths must be nonempty.' }
@@ -158,28 +160,28 @@ function Get-ClaimId([string]$Owner, [string]$RelativePath, [string]$Scope) {
     return ([BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
 }
 
-function Write-Claim([string]$ClaimPath, [object]$Claim) {
+function Write-Lease([string]$LeasePath, [object]$Lease) {
     # Publish complete JSON even if a process is terminated during a renewal.
-    $pending = Join-Path $claimsRoot ([IO.Path]::GetRandomFileName())
+    $pending = [IO.Path]::Combine([IO.Path]::GetDirectoryName($LeasePath), [IO.Path]::GetRandomFileName())
     try {
-        [IO.File]::WriteAllText($pending, ($Claim | ConvertTo-Json -Compress))
-        if ([IO.File]::Exists($ClaimPath)) {
-            [IO.File]::Replace($pending, $ClaimPath, [Management.Automation.Language.NullString]::Value)
+        [IO.File]::WriteAllText($pending, ($Lease | ConvertTo-Json -Compress))
+        if ([IO.File]::Exists($LeasePath)) {
+            [IO.File]::Replace($pending, $LeasePath, [Management.Automation.Language.NullString]::Value)
         } else {
-            [IO.File]::Move($pending, $ClaimPath)
+            [IO.File]::Move($pending, $LeasePath)
         }
     } finally {
         if ([IO.File]::Exists($pending)) { [IO.File]::Delete($pending) }
     }
 }
 
-function Invoke-WithRegistryLock([scriptblock]$Body) {
+function Invoke-WithRegistryLock([scriptblock]$Body, [string]$RegistryLockPath = $lockPath) {
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     $stream = $null
     while ($null -eq $stream) {
         try {
             # The operating system releases the exclusive handle even if its owner is killed.
-            $stream = [IO.FileStream]::new($lockPath, [IO.FileMode]::OpenOrCreate,
+            $stream = [IO.FileStream]::new($RegistryLockPath, [IO.FileMode]::OpenOrCreate,
                 [IO.FileAccess]::Write, [IO.FileShare]::None, 4096, [IO.FileOptions]::DeleteOnClose)
         } catch [IO.IOException] {
             if ([DateTime]::UtcNow -ge $deadline) { throw 'Timed out waiting for the Fusion guard registry lock.' }
@@ -209,6 +211,14 @@ function Get-Conflicts([object[]]$Claims) {
 function Test-IgnoredPath([string]$RelativePath) {
     return $RelativePath -eq '.git' -or $RelativePath.StartsWith('.git/', [StringComparison]::OrdinalIgnoreCase) -or
            $RelativePath -eq '.codex' -or $RelativePath -eq '.codex/fusion-agent-guard' -or $RelativePath.StartsWith('.codex/fusion-agent-guard/', [StringComparison]::OrdinalIgnoreCase)
+}
+
+if ($isFusionUi) {
+    . (Join-Path $PSScriptRoot 'fusion-ui.ps1')
+    $result = Invoke-FusionUiLease -Action $Command -Project $projectRoot -Agent $Agent -Task $Task -Message $Message -TtlSeconds $TtlSeconds
+    Write-Json $result
+    if (-not $result.ok) { exit 2 }
+    exit 0
 }
 
 switch ($Command) {
@@ -302,7 +312,7 @@ switch ($Command) {
                         $plan.claims.Add($claim)
                     }
                 }
-                Write-Claim $claimPath $claim
+                Write-Lease $claimPath $claim
                 $created += $claim | Select-Object agent,path,mode,createdAt,expiresAt,task,message
             }
             foreach ($plan in $plans.psbase.Values) {

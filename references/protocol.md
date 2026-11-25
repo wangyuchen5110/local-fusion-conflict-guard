@@ -24,6 +24,16 @@ MCP 可选的 `agent` 标签为 1–120 个字符。身份比较忽略大小写�
 - **讨论记录。** 事件有 `seq`、`task`、`agent`、`kind`、`message`、`to`、`timestamp`。任务摘要列出任务名、参与者、最后序号和最后消息类型。带 `to` 的消息仍在公开任务讨论中可见；指向 MCP 参与者时用看板上的完整身份。`done` 表示通知进展，不会释放租约或关闭讨论。
 - **翻页与等待。** 可选的 `task` 同时筛选当前占用和任务讨论。`events` 按序号升序返回 `after` 之后的匹配消息。下次用 `nextAfter` 作为 `after`，每个筛选条件单独保存游标。`hasMore` 为真时继续取下一页。没有积压消息时可等待新的匹配消息，超时返回空页。租约释放或到期后，相关消息仍然可读。
 
+## Fusion 前台租约
+
+| CLI | MCP | 返回结果 |
+| --- | --- | --- |
+| `fusion-ui-acquire -Agent ID` | `fusion_ui_acquire` | 空闲或原持有者续租时为 `fusion-ui-acquired`，他人占用时为 `fusion-ui-busy` |
+| `fusion-ui-status` | `fusion_ui_status` | `fusion-ui-status`，其中 `holder` 为当前持有人，空闲时为 null |
+| `fusion-ui-release -Agent ID` | `fusion_ui_release` | 释放成功或已经空闲时为 `fusion-ui-released`，他人占用时为 `fusion-ui-busy` |
+
+同一台电脑、同一 Windows 账户下的所有项目共用一份前台租约。持有人由项目和 agent 身份共同确定。申请时可传 `-Task`、`-Message`、`-TtlSeconds`（MCP 为 `task`、`message`、`ttl_seconds`）。默认 600 秒，可设为 15–86400 秒。有效的 `holder` 含 `project`、`agent`、`task`、`message`、`acquiredAt` 和 `expiresAt`。申请、续租、释放时使用同一身份与入口。遇到占用返回 `ok: false`，CLI 退出码为 2。到期后下一次调用即可重新申请。项目内的文件与目录占用独立管理。
+
 ## 路径与冲突判定
 
 `claim` 接受项目根目录下的相对路径或指向项目内部的绝对路径。返回的路径相对于项目根目录，分隔符为 `/`。可预先申请尚未创建的文件。路径比较忽略大小写、末尾的分隔符和同批中的重复项。传具体路径，通配符不会展开。所有客户端应采用相同的目录拼写，尤其在使用符号链接、目录联接或硬链接时。
@@ -50,7 +60,7 @@ MCP 可选的 `agent` 标签为 1–120 个字符。身份比较忽略大小写�
 | `edit` | 必填单个 `path`、非空原文 `old_text`、替换文字 `new_text`（空串表示删去该段），可选 `agent` | 成功为 `edited` 并含 `changed`，冲突为 `edit-conflict` 并含 `reason` |
 | `claim` | 必填 `paths`，至少一个非空路径的字符串数组。可选 `mode` 为 `file`（默认）或 `tree`，`ttl_seconds` 为 15–86400 的整数，默认 600，`agent` 见上表 可选 `task`、`message` 公开修改目的。 | 成功为 `claim-accepted`，冲突为 `claim-conflict` |
 | `status` | `{}` | `kind: "status"`，列出当前的 `claims` 与已存在的重叠 `conflicts` |
-| `release` | 可选 `agent` | `kind: "released"`，释放这个身份在当前项目持有的**全部**有效租约 |
+| `release` | 可选 `agent` | `kind: "released"`，释放这个身份在当前项目持有的**全部文件和目录**租约 |
 | `watch_changes` | 可选整数 `seconds`，范围 1–15，默认 3 | `project`、`events`、`limit_reached`，每次最多 100 条 |
 
 假设 CLI 任务 `api` 已占用 `src` 目录树，MCP 任务 `ui` 申请 `{"paths":["src/app.ts"],"agent":"ui"}`，会得到如下结构。示例中的项目、身份和到期时间仅供说明。
